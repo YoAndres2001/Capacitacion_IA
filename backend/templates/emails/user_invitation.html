@@ -1,0 +1,24 @@
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1a1a1a">
+  <h2 style="color:#1976d2;margin:0 0 16px">Bienvenido a Capacita IA</h2>
+
+  <p>Hola {{ user_name }},</p>
+
+  <p>{{ company }} creó una cuenta para ti en la plataforma de capacitaciones con Inteligencia Artificial.</p>
+
+  <table style="width:100%;background:#f5f7fa;border-radius:8px;padding:16px;margin:20px 0">
+    <tr><td style="padding:4px 0"><strong>Correo:</strong></td><td>{{ email }}</td></tr>
+    <tr><td style="padding:4px 0"><strong>Contraseña temporal:</strong></td>
+        <td><code style="background:#fff;padding:3px 8px;border-radius:4px">{{ temp_password }}</code></td></tr>
+  </table>
+
+  <p style="margin:28px 0">
+    <a href="{{ frontend_url }}/login"
+       style="background:#1976d2;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block">
+      Ingresar a la plataforma
+    </a>
+  </p>
+
+  <p style="font-size:13px;color:#555">
+    Por seguridad, cambia tu contraseña la primera vez que inicies sesión.
+  </p>
+</div>

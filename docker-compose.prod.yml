@@ -1,0 +1,236 @@
+# ─────────────────────────────────────────────────────────────
+#  Capacita IA · Docker Compose · ENTORNO DE PRODUCCIÓN
+#  Uso:  docker compose -f docker-compose.prod.yml up -d
+#  Escala: docker compose -f docker-compose.prod.yml up -d --scale backend=4
+# ─────────────────────────────────────────────────────────────
+
+x-backend-env: &backend-env
+  env_file: [.env]
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.prod
+    PYTHONUNBUFFERED: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+
+x-backend-build: &backend-build
+  build:
+    context: ./backend
+    dockerfile: ../docker/backend/Dockerfile
+    target: production
+
+x-backend-volumes: &backend-volumes
+  volumes:
+    - media_data:/app/media
+    - faiss_indices:/app/indices
+    - static_data:/app/staticfiles
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+
+  postgres:
+    image: postgres:17-alpine
+    <<: *restart
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 4G}
+    networks: [data_net]
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+    networks: [data_net]
+
+  ollama:
+    image: ollama/ollama:latest
+    <<: *restart
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits: {cpus: "6", memory: 12G}
+    networks: [data_net]
+
+  migrate:
+    <<: [*backend-build, *backend-env, *backend-volumes]
+    command: >
+      sh -c "python manage.py wait_for_db &&
+             python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: "no"
+    networks: [app_net, data_net]
+
+  backend:
+    <<: [*backend-build, *backend-env, *backend-volumes, *restart]
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-4}
+      --worker-class gthread
+      --threads 4
+      --timeout 120
+      --graceful-timeout 30
+      --max-requests 1000
+      --max-requests-jitter 100
+      --access-logfile - --error-logfile -
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health/live')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: 3
+      resources:
+        limits: {cpus: "2", memory: 2G}
+    networks: [app_net, data_net]
+
+  # WebSocket en contenedor INDEPENDIENTE (restricción del proyecto)
+  websocket:
+    <<: [*backend-build, *backend-env, *backend-volumes, *restart]
+    command: daphne -b 0.0.0.0 -p 8001 --proxy-headers --access-log - config.asgi:application
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8001/health/live')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: 2
+      resources:
+        limits: {cpus: "1", memory: 1G}
+    networks: [app_net, data_net]
+
+  celery-worker:
+    <<: [*backend-build, *backend-env, *backend-volumes, *restart]
+    command: celery -A config worker -Q default -l info --concurrency=4 --max-tasks-per-child=200
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      replicas: 2
+      resources:
+        limits: {cpus: "2", memory: 2G}
+    networks: [worker_net, data_net]
+
+  celery-ingest:
+    <<: [*backend-env, *backend-volumes, *restart]
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend/Dockerfile
+      target: ingest
+    command: celery -A config worker -Q ingest -l info --concurrency=2 --max-tasks-per-child=4
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      replicas: 2
+      resources:
+        limits: {cpus: "4", memory: 6G}
+    networks: [worker_net, data_net]
+
+  celery-ai:
+    <<: [*backend-build, *backend-env, *backend-volumes, *restart]
+    command: celery -A config worker -Q ai -l info --concurrency=2
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      replicas: 2
+      resources:
+        limits: {cpus: "2", memory: 3G}
+    networks: [worker_net, data_net]
+
+  celery-beat:
+    <<: [*backend-build, *backend-env, *backend-volumes, *restart]
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      replicas: 1          # NUNCA más de una instancia
+    networks: [worker_net, data_net]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend/Dockerfile
+      target: production
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_WS_URL: ${VITE_WS_URL}
+    <<: *restart
+    networks: [app_net]
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: ../docker/nginx/Dockerfile
+    <<: *restart
+    volumes:
+      - media_data:/var/www/media:ro
+      - static_data:/var/www/static:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on: [backend, websocket, frontend]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 512M}
+    networks: [edge_net, app_net]
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  faiss_indices:
+  static_data:
+  ollama_models:
+
+networks:
+  edge_net:
+  app_net:
+  worker_net:
+  data_net:
+    internal: true          # PostgreSQL, Redis y Ollama sin acceso a Internet

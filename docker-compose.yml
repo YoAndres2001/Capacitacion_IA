@@ -1,0 +1,276 @@
+# =============================================================
+#  Capacita IA - Docker Compose - ENTORNO DE DESARROLLO
+#  Uso:  docker compose up -d
+#
+#  Los puertos publicados son configurables por .env (PORT_*)
+#  para convivir con otros proyectos en la misma maquina.
+# =============================================================
+
+x-backend-env: &backend-env
+  env_file: [.env]
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.dev
+    PYTHONUNBUFFERED: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+
+x-backend-build: &backend-build
+  build:
+    context: ./backend
+    dockerfile: ../docker/backend/Dockerfile
+    target: development
+
+x-backend-volumes: &backend-volumes
+  volumes:
+    - ./backend:/app
+    - media_data:/app/media
+    - faiss_indices:/app/indices
+    - static_data:/app/staticfiles
+
+# Los workers no exponen HTTP: se anula el healthcheck HTTP de la imagen y se
+# comprueba el worker con `celery inspect ping`.
+x-celery-healthcheck: &celery-healthcheck
+  healthcheck:
+    test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+    interval: 60s
+    timeout: 15s
+    retries: 3
+    start_period: 60s
+
+services:
+
+  # -- Base de datos -------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: capacita_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-capacita}
+      POSTGRES_USER: ${POSTGRES_USER:-capacita}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-capacita}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${PORT_POSTGRES:-5442}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-capacita} -d ${POSTGRES_DB:-capacita}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [data_net]
+
+  # -- Cache / broker / channel layer --------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: capacita_redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${PORT_REDIS:-6389}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [data_net]
+
+  # -- Proveedor de IA gratuito (LLM + embeddings locales) -----
+  ollama:
+    image: ollama/ollama:latest
+    container_name: capacita_ollama
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "${PORT_OLLAMA:-11435}:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks: [data_net]
+
+  # Descarga los modelos gratuitos la primera vez y termina.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: capacita_ollama_init
+    depends_on:
+      ollama: {condition: service_healthy}
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Descargando modelos gratuitos (puede tardar varios minutos la primera vez)..."
+        ollama pull ${OLLAMA_LLM_MODEL:-qwen2.5:1.5b-instruct}
+        ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+        echo "Modelos listos."
+    restart: "no"
+    networks: [data_net]
+
+  # -- Migraciones y datos de demostracion ---------------------
+  migrate:
+    <<: [*backend-build, *backend-env, *backend-volumes]
+    container_name: capacita_migrate
+    command: >
+      sh -c "python manage.py wait_for_db &&
+             python manage.py migrate --noinput &&
+             python manage.py seed_demo --if-empty"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: "no"
+    networks: [app_net, data_net]
+
+  # -- API REST (HTTP puro - SIN WebSockets) -------------------
+  backend:
+    <<: [*backend-build, *backend-env, *backend-volumes]
+    container_name: capacita_backend
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "${PORT_BACKEND:-8010}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health/live')\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [app_net, data_net]
+
+  # -- WebSocket - CONTENEDOR INDEPENDIENTE (Channels+Daphne) --
+  websocket:
+    <<: [*backend-build, *backend-env, *backend-volumes]
+    container_name: capacita_websocket
+    command: daphne -b 0.0.0.0 -p 8001 --proxy-headers config.asgi:application
+    ports:
+      - "${PORT_WEBSOCKET:-8011}:8001"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    # Daphne escucha en 8001: se sobrescribe el healthcheck de la imagen (8000).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8001/health/live')\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [app_net, data_net]
+
+  # -- Celery - cola general -----------------------------------
+  celery-worker:
+    <<: [*backend-build, *backend-env, *backend-volumes, *celery-healthcheck]
+    container_name: capacita_celery_worker
+    command: celery -A config worker -Q default -l info --concurrency=4
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [worker_net, data_net]
+
+  # -- Celery - cola de ingesta (ffmpeg + Whisper) -------------
+  celery-ingest:
+    <<: [*backend-env, *backend-volumes, *celery-healthcheck]
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend/Dockerfile
+      target: ingest
+    container_name: capacita_celery_ingest
+    command: celery -A config worker -Q ingest -l info --concurrency=2 --max-tasks-per-child=4
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [worker_net, data_net]
+
+  # -- Celery - cola de IA (embeddings + LLM) ------------------
+  celery-ai:
+    <<: [*backend-build, *backend-env, *backend-volumes, *celery-healthcheck]
+    container_name: capacita_celery_ai
+    command: celery -A config worker -Q ai -l info --concurrency=2
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [worker_net, data_net]
+
+  # -- Celery beat (una sola instancia) ------------------------
+  celery-beat:
+    <<: [*backend-build, *backend-env, *backend-volumes]
+    container_name: capacita_celery_beat
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    # beat no es un worker: no responde a `inspect ping`.
+    healthcheck:
+      disable: true
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [worker_net, data_net]
+
+  # -- Monitoreo de colas --------------------------------------
+  flower:
+    image: mher/flower:2.0
+    container_name: capacita_flower
+    command: celery --broker=${CELERY_BROKER_URL:-redis://redis:6379/0} flower --port=5555
+    ports:
+      - "${PORT_FLOWER:-5599}:5555"
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [worker_net, data_net]
+
+  # -- Frontend (Vite dev server con HMR) ----------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend/Dockerfile
+      target: development
+    container_name: capacita_frontend
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8088/api/v1}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8088/ws}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${PORT_FRONTEND:-5183}:5173"
+    networks: [app_net]
+
+  # -- Reverse proxy -------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: capacita_nginx
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - media_data:/var/www/media:ro
+      - static_data:/var/www/static:ro
+    ports:
+      - "${PORT_HTTP:-8088}:80"
+    depends_on:
+      - backend
+      - websocket
+      - frontend
+    networks: [edge_net, app_net]
+
+  # -- Correo de desarrollo ------------------------------------
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: capacita_mailhog
+    ports:
+      - "${PORT_SMTP:-1026}:1025"
+      - "${PORT_MAILHOG:-8026}:8025"
+    networks: [app_net]
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  faiss_indices:
+  static_data:
+  ollama_models:
+
+networks:
+  edge_net:
+  app_net:
+  worker_net:
+  data_net:

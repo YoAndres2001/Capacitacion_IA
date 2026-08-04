@@ -1,0 +1,59 @@
+[project]
+name = "capacita-ia-backend"
+version = "1.0.0"
+description = "Plataforma de capacitaciones con IA · backend Django + DRF"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = ["migrations", ".venv", "staticfiles", "media"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "DJ", "SIM", "RUF"]
+ignore = [
+    "E501",   # el largo lo controla black
+    "B008",   # llamadas en argumentos por defecto (patrón habitual en DRF)
+    "RUF012", # atributos mutables de clase (Meta de Django)
+    "N818",   # sufijo Error en excepciones de dominio
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "config"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+extend-exclude = "migrations"
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+exclude = ["migrations", "tests"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings.dev"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["src/tests"]
+addopts = "-ra --strict-markers --cov=src --cov-report=term-missing:skip-covered"
+markers = [
+    "unit: pruebas de dominio y aplicación (sin base de datos)",
+    "integration: pruebas con base de datos o adaptadores",
+    "e2e: pruebas de la API completa",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/admin.py",
+    "*/apps.py",
+    "*/__init__.py",
+]

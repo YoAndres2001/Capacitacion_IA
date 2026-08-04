@@ -1,0 +1,41 @@
+# ── Núcleo Django ────────────────────────────────────────────
+Django==5.1.4
+djangorestframework==3.15.2
+django-cors-headers==4.6.0
+django-filter==24.3
+djangorestframework-simplejwt==5.3.1
+drf-spectacular==0.27.2
+drf-spectacular-sidecar==2024.11.1
+
+# ── Base de datos ────────────────────────────────────────────
+psycopg[binary]==3.2.3
+dj-database-url==2.3.0
+
+# ── Asíncrono ────────────────────────────────────────────────
+celery==5.4.0
+redis==5.2.0
+django-celery-beat==2.7.0
+django-celery-results==2.5.1
+flower==2.0.1
+
+# ── Tiempo real (contenedor websocket) ───────────────────────
+channels==4.2.0
+channels-redis==4.2.1
+daphne==4.1.2
+
+# ── Seguridad ────────────────────────────────────────────────
+argon2-cffi==23.1.0
+python-magic==0.4.27
+django-ratelimit==4.1.0
+
+# ── Utilidades ───────────────────────────────────────────────
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+Pillow==11.0.0
+python-slugify==8.0.4
+charset-normalizer==3.4.0
+structlog==24.4.0
+django-storages==1.14.4
+whitenoise==6.8.2
+tenacity==9.0.0

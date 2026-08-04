@@ -1,0 +1,12 @@
+Bienvenido a Capacita IA
+
+Hola {{ user_name }},
+
+{{ company }} creó una cuenta para ti en la plataforma de capacitaciones con IA.
+
+  Correo: {{ email }}
+  Contraseña temporal: {{ temp_password }}
+
+Ingresa en: {{ frontend_url }}/login
+
+Por seguridad, cambia tu contraseña la primera vez que inicies sesión.

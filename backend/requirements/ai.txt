@@ -1,0 +1,31 @@
+# ── Orquestación de IA ───────────────────────────────────────
+langchain==0.3.13
+langchain-core==0.3.28
+langchain-community==0.3.13
+langchain-text-splitters==0.3.4
+langgraph==0.2.60
+
+# Proveedores (Ollama es el gratuito por defecto)
+langchain-ollama==0.2.2
+ollama==0.4.4
+langchain-openai==0.2.14          # opcional, solo si AI_PROVIDER=openai
+openai==1.58.1                    # opcional
+
+# ── Base vectorial ───────────────────────────────────────────
+faiss-cpu==1.9.0.post1
+numpy==1.26.4
+
+# ── Transcripción (gratis, local) ────────────────────────────
+faster-whisper==1.1.0
+ffmpeg-python==0.2.0
+
+# ── Extracción de documentos ─────────────────────────────────
+PyMuPDF==1.25.1                   # PDF
+python-docx==1.1.2                # DOCX
+python-pptx==1.0.2                # PPTX
+pdf2image==1.17.0
+pytesseract==0.3.13               # OCR de PDFs escaneados
+markdown-it-py==3.0.0
+
+# ── Tokenización ─────────────────────────────────────────────
+tiktoken==0.8.0
