@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -33,6 +33,11 @@ logger = get_logger("assessments.generator")
 
 MIN_CHUNKS = 5
 DUPLICATE_THRESHOLD = 0.75
+
+#: Reparto de la barra de avance: un tramo fijo por preparar el material y el
+#: resto repartido entre los lotes, que es donde se va todo el tiempo real.
+PROGRESS_SETUP = 5
+PROGRESS_BATCHES = 95 - PROGRESS_SETUP
 
 
 class OptionOut(BaseModel):
@@ -80,10 +85,18 @@ REGLAS
 - TRUE_FALSE: exactamente 2 alternativas ("Verdadero" y "Falso"), una correcta.
 - MULTIPLE_CHOICE: 5 alternativas, entre 2 y 3 correctas.
 - SHORT_ANSWER: `correct_text` con la respuesta esperada (máx. 15 palabras).
-- OPEN_ENDED: `correct_text` con los puntos clave que debe cubrir la respuesta.
+- OPEN_ENDED: `correct_text` con los puntos clave que debe cubrir la respuesta
+  (máx. 30 palabras).
 - Cada pregunta debe traer `explanation` y `source_index` con el número del
   fragmento del MATERIAL en el que se basa.
 - No repitas ni parafrasees la misma idea dos veces.
+
+SÉ BREVE. El presupuesto de salida es limitado y un JSON que se corta se
+descarta entero:
+- `statement`: máx. 25 palabras. No cites el MATERIAL, pregunta directamente.
+- `explanation`: máx. 20 palabras. Una sola frase, sin citar el fragmento.
+- `feedback` de cada alternativa: máx. 12 palabras. Puede quedar vacío ("").
+- `text` de cada alternativa: máx. 12 palabras.
 
 ANTES DE RESPONDER, verifica que cada enunciado mencione algo que aparece
 literalmente en el MATERIAL de arriba. Si no aparece, descártalo y escribe otro.
@@ -107,6 +120,10 @@ class GenerationRequest:
     max_attempts: int = 3
     time_limit_minutes: int = 0
     created_by: Any = None
+    #: Se invoca tras cada lote con el avance. Generar un examen tarda decenas de
+    #: minutos en CPU: sin esto la interfaz no puede distinguir "trabajando" de
+    #: "colgado".
+    on_progress: Callable[[dict[str, Any]], None] | None = None
 
 
 class ExamGenerator:
@@ -144,11 +161,32 @@ class ExamGenerator:
         # Medido: un JSON de 2 preguntas tarda ~100 s en CPU; el mismo prompt
         # pidiendo 6 no vuelve dentro del timeout. Además cada lote recibe una
         # porción distinta del material, lo que mejora la cobertura del curso.
-        for batch in self._batches(distribution):
+        batches = self._batches(distribution)
+        self._report(request, exam, step="material", progress=PROGRESS_SETUP, questions=0)
+
+        for index, batch in enumerate(batches, start=1):
+            if created >= request.num_questions:
+                break
             material = self._render_material(self._rotate(chunks, len(seen_statements)))
             parsed, usage = self._ask_llm(batch, request.level, material)
             total_usage = total_usage + usage
-            created += self._persist(exam, parsed.questions, chunks, seen_statements, created)
+            created += self._persist(
+                exam,
+                parsed.questions,
+                chunks,
+                seen_statements,
+                created,
+                limit=request.num_questions - created,
+            )
+            self._report(
+                request,
+                exam,
+                step="questions",
+                progress=PROGRESS_SETUP + round(PROGRESS_BATCHES * index / len(batches)),
+                questions=created,
+            )
+
+        self._report(request, exam, step="done", progress=100, questions=created)
 
         record_usage(
             usage=total_usage,
@@ -163,6 +201,34 @@ class ExamGenerator:
             f"(examen {exam.id}, modelo {self._llm.model_name})"
         )
         return exam
+
+    @staticmethod
+    def _report(
+        request: GenerationRequest,
+        exam: Exam,
+        *,
+        step: str,
+        progress: int,
+        questions: int,
+    ) -> None:
+        """
+        Publica el avance sin dejar que un fallo del canal aborte la generación:
+        perder la barra de progreso es molesto, perder 40 minutos de trabajo no.
+        """
+        if request.on_progress is None:
+            return
+        try:
+            request.on_progress(
+                {
+                    "exam_id": str(exam.id),
+                    "step": step,
+                    "progress": progress,
+                    "questions": questions,
+                    "total": request.num_questions,
+                }
+            )
+        except Exception:
+            logger.warning("No se pudo publicar el avance de la generación", exc_info=True)
 
     @staticmethod
     def _batches(distribution: dict[str, int]) -> list[dict[str, int]]:
@@ -337,13 +403,18 @@ class ExamGenerator:
         chunks: list[Chunk],
         seen_statements: list[set[str]],
         start_order: int = 0,
+        limit: int | None = None,
     ) -> int:
         """
-        Persiste las preguntas válidas del lote.
+        Persiste las preguntas válidas del lote, hasta `limit` como máximo.
 
         `seen_statements` se comparte entre lotes para que la deduplicación
         semántica funcione a lo largo de todo el examen, no solo dentro de una
         llamada.
+
+        El tope es imprescindible: un modelo pequeño ignora la cantidad pedida y
+        sigue redactando hasta agotar el presupuesto de tokens. Sin `limit`, un
+        examen de 10 preguntas termina con 30.
         """
         valid_types = set(Question.Type.values)
         valid_levels = set(Question.Level.values)
@@ -352,6 +423,8 @@ class ExamGenerator:
         material_words = _material_vocabulary(chunks)
 
         for candidate in questions:
+            if limit is not None and created >= limit:
+                break
             question_type = candidate.type.strip().upper()
             if question_type not in valid_types:
                 continue

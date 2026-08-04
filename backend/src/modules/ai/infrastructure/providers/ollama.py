@@ -292,7 +292,9 @@ def parse_json_loosely(content: str) -> Any:
     """
     Parsea JSON tolerando el ruido típico de los modelos pequeños.
 
-    Quita vallas de código y recorta hasta el primer `{`/`[` y el último `}`/`]`.
+    Quita vallas de código, recorta hasta el primer `{`/`[` y el último `}`/`]`,
+    y como último recurso repara una salida cortada a mitad (ver
+    `repair_truncated_json`).
     """
     text = content.strip()
     if text.startswith("```"):
@@ -315,4 +317,63 @@ def parse_json_loosely(content: str) -> Any:
             except json.JSONDecodeError:
                 continue
 
+    repaired = repair_truncated_json(text)
+    if repaired is not None:
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+        else:
+            logger.warning(
+                "Salida del modelo cortada por límite de tokens: se rescataron los "
+                "elementos completos y se descartó el fragmento final a medias."
+            )
+            return parsed
+
     raise ValueError(f"El modelo no devolvió JSON válido: {content[:300]}")
+
+
+def repair_truncated_json(text: str) -> str | None:
+    """
+    Reconstruye un JSON que el modelo dejó a medias al agotar `num_predict`.
+
+    Con `format: json` la salida es válida hasta el punto en que se corta, así
+    que basta con retroceder al último elemento que sí quedó completo y cerrar
+    las estructuras que seguían abiertas. Un examen recupera así las preguntas
+    que el modelo alcanzó a terminar en lugar de perder el lote entero.
+
+    Devuelve `None` si no hay ningún elemento completo que rescatar.
+    """
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    cut: tuple[int, tuple[str, ...]] | None = None
+
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            stack.append("}" if character == "{" else "]")
+        elif character in "}]":
+            if not stack or stack[-1] != character:
+                return None  # JSON mal formado, no solo incompleto
+            stack.pop()
+            # Un elemento acaba de cerrarse. Si todavía queda algo abierto por
+            # encima, este es un punto seguro por el que cortar.
+            if stack:
+                cut = (index + 1, tuple(stack))
+
+    if cut is None:
+        return None
+
+    end, pending = cut
+    return text[:end] + "".join(reversed(pending))

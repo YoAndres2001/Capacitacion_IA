@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from src.shared.container import get_notifier
-from src.shared.presentation.permissions import IsAdmin, IsSuperAdmin
+from src.shared.presentation.permissions import IsAdmin, IsInstructor, IsSuperAdmin
 
 from ..infrastructure.models import AuditLog, Company, User, UserGroup
 from .auth_views import generate_temp_password
@@ -41,6 +41,12 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "first_name", "email"]
     ordering = ["first_name"]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        """El instructor consulta usuarios para asignar participantes; escribir es solo de admin."""
+        if self.action in {"list", "retrieve"}:
+            return [IsInstructor()]
+        return [IsAdmin()]
 
     def get_queryset(self):
         qs = User.objects.select_related("company")

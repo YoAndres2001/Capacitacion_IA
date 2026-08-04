@@ -6,9 +6,19 @@ from celery import shared_task
 
 from src.shared.container import get_event_publisher, get_llm
 from src.shared.domain.events import AttemptGraded
+from src.shared.domain.exceptions import DomainError
 from src.shared.infrastructure.logging import get_logger
 
 logger = get_logger("assessments.tasks")
+
+
+def _notify(user_id, payload: dict) -> None:
+    """Envía al creador el desenlace de una tarea larga; sin él la UI se queda esperando."""
+    if user_id is None:
+        return
+    get_event_publisher().send_to_group(
+        f"user.{user_id}", {"type": "notification.message", **payload}
+    )
 
 
 @shared_task(name="assessments.generate_exam", bind=True, queue="ai", max_retries=1)
@@ -25,36 +35,88 @@ def generate_exam(self, training_id: str, options: dict) -> dict:
         if options.get("created_by")
         else None
     )
+    user_id = getattr(created_by, "id", None)
 
-    exam = ExamGenerator(llm=get_llm()).generate(
-        GenerationRequest(
-            training=training,
-            title=options.get("title") or f"Evaluación · {training.title}",
-            num_questions=int(options.get("num_questions", 10)),
-            level=options.get("level", "INTERMEDIATE"),
-            distribution=options.get("distribution"),
-            passing_score=int(options.get("passing_score", 70)),
-            max_attempts=int(options.get("max_attempts", 3)),
-            time_limit_minutes=int(options.get("time_limit_minutes", 0)),
-            created_by=created_by,
-        )
-    )
-
-    if created_by is not None:
-        get_event_publisher().send_to_group(
-            f"user.{created_by.id}",
+    def report(payload: dict) -> None:
+        _notify(
+            user_id,
             {
-                "type": "notification.message",
-                "event": "exam.generated",
-                "exam_id": str(exam.id),
+                "event": "exam.generation_progress",
                 "training_id": str(training.id),
-                "questions": exam.questions.count(),
+                **payload,
             },
         )
 
+    try:
+        exam = ExamGenerator(llm=get_llm()).generate(
+            GenerationRequest(
+                training=training,
+                title=options.get("title") or f"Evaluación · {training.title}",
+                num_questions=int(options.get("num_questions", 10)),
+                level=options.get("level", "INTERMEDIATE"),
+                distribution=options.get("distribution"),
+                passing_score=int(options.get("passing_score", 70)),
+                max_attempts=int(options.get("max_attempts", 3)),
+                time_limit_minutes=int(options.get("time_limit_minutes", 0)),
+                created_by=created_by,
+                on_progress=report if user_id else None,
+            )
+        )
+    except DomainError as error:
+        # Falta de material, proveedor caído: el motivo es accionable por el
+        # usuario, así que se le entrega tal cual.
+        logger.warning(f"Generación de examen fallida ({error.code}): {error.message}")
+        _notify(
+            user_id,
+            {
+                "event": "exam.generation_failed",
+                "training_id": str(training.id),
+                "code": error.code,
+                "message": error.message,
+            },
+        )
+        raise
+    except Exception as error:
+        logger.exception("Generación de examen interrumpida por un error inesperado")
+        _notify(
+            user_id,
+            {
+                "event": "exam.generation_failed",
+                "training_id": str(training.id),
+                "code": "UNEXPECTED_ERROR",
+                "message": f"La generación se interrumpió: {error}",
+            },
+        )
+        raise
+
+    questions = exam.questions.count()
+
+    # Un examen sin preguntas es un fallo aunque la tarea haya terminado bien:
+    # el modelo no produjo nada aprovechable y el usuario debe saberlo.
+    _notify(
+        user_id,
+        {
+            "event": "exam.generated" if questions else "exam.generation_failed",
+            "exam_id": str(exam.id),
+            "training_id": str(training.id),
+            "questions": questions,
+            **(
+                {}
+                if questions
+                else {
+                    "code": "NO_QUESTIONS_GENERATED",
+                    "message": (
+                        "El modelo no produjo preguntas válidas sobre el material. "
+                        "Intente con más contenido o un modelo mayor."
+                    ),
+                }
+            ),
+        },
+    )
+
     return {
         "exam_id": str(exam.id),
-        "questions": exam.questions.count(),
+        "questions": questions,
         "status": exam.status,
     }
 

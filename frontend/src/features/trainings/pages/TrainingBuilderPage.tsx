@@ -36,7 +36,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorMessage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
@@ -44,7 +44,9 @@ import type { Exam, Lesson, TrainingDetail, TrainingModule } from '@/shared/api/
 import { ConfirmDialog, ErrorState, Loading, PageHeader, StatusChip } from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 import { EnrollmentPanel } from '@/features/trainings/components/EnrollmentPanel';
+import { ExamGenerationCard } from '@/features/exams/components/ExamGenerationCard';
 import { ExamGeneratorDialog } from '@/features/exams/components/ExamGeneratorDialog';
+import { useExamGeneration } from '@/features/exams/hooks/useExamGeneration';
 import { MaterialUploader } from '@/features/trainings/components/MaterialUploader';
 import { formatDurationLong } from '@/shared/utils/format';
 
@@ -75,6 +77,12 @@ export default function TrainingBuilderPage() {
   });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['training', trainingId] });
+
+  const onGenerationFinished = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: ['training', trainingId, 'exams'] }),
+    [queryClient, trainingId],
+  );
+  const { generation, start, dismiss } = useExamGeneration(trainingId, onGenerationFinished);
 
   const publish = useMutation({
     mutationFn: (action: 'publish' | 'unpublish') =>
@@ -243,11 +251,14 @@ export default function TrainingBuilderPage() {
             <Button
               variant="contained"
               startIcon={<AutoAwesome />}
+              disabled={generation !== null && !generation.failed}
               onClick={() => setGeneratorOpen(true)}
             >
               Generar con IA
             </Button>
           </Stack>
+
+          {generation && <ExamGenerationCard generation={generation} onDismiss={dismiss} />}
 
           {(exams.data?.length ?? 0) === 0 ? (
             <Card>
@@ -338,7 +349,7 @@ export default function TrainingBuilderPage() {
         open={generatorOpen}
         trainingId={trainingId}
         onClose={() => setGeneratorOpen(false)}
-        onGenerated={() => exams.refetch()}
+        onGenerated={start}
       />
       <ConfirmDialog
         open={confirmDelete !== null}

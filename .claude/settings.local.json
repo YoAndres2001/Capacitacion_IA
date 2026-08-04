@@ -36,7 +36,9 @@
       "Bash(echo \"=========== PREGUNTA 3 \\(adaptacion de nivel\\) ===========\")",
       "Bash(curl -s --max-time 20 http://localhost:8088/health/ready)",
       "Bash(curl -s --max-time 10 http://localhost:8088/health/ready)",
-      "Bash(echo 'material 2: __CMDSUB_OUTPUT__')"
+      "Bash(echo 'material 2: __CMDSUB_OUTPUT__')",
+      "PowerShell(docker exec capacita_frontend npx tsc --noEmit 2>&1)",
+      "PowerShell(\"typecheck terminado \\(sin salida = limpio\\)\")"
     ]
   }
 }

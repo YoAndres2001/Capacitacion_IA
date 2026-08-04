@@ -33,7 +33,8 @@ interface Props {
   open: boolean;
   trainingId: string;
   onClose: () => void;
-  onGenerated: () => void;
+  /** Recibe el total pedido, para poder mostrar «N de M» mientras se genera. */
+  onGenerated: (total: number) => void;
 }
 
 export function ExamGeneratorDialog({ open, trainingId, onClose, onGenerated }: Props) {
@@ -67,7 +68,7 @@ export function ExamGeneratorDialog({ open, trainingId, onClose, onGenerated }: 
       snackbar.success(
         'Generación en curso. El examen aparecerá en borrador cuando la IA termine.',
       );
-      onGenerated();
+      onGenerated(total);
       onClose();
     },
     onError: (error) => snackbar.error(errorMessage(error)),

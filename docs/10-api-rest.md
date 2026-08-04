@@ -236,7 +236,7 @@ Base: `wss://host/ws/` · autenticación por `?token=<access_jwt>` validada en `
 |-------|---------------------------|
 | `/ws/materials/{material_id}/` | `status.changed`, `progress`, `completed`, `failed` |
 | `/ws/chat/{session_id}/` | `token`, `answer.done`, `error` · cliente → servidor: `question`, `cancel` |
-| `/ws/notifications/` | `notification`, `enrollment.assigned`, `attempt.graded` |
+| `/ws/notifications/` | `notification`, `enrollment.assigned`, `attempt.graded`, `exam.generation_progress`, `exam.generated`, `exam.generation_failed` |
 
 ```json
 // servidor → cliente
@@ -244,6 +244,22 @@ Base: `wss://host/ws/` · autenticación por `?token=<access_jwt>` validada en `
 {"type":"token","session_id":"3b7...","content":"El inventario "}
 {"type":"answer.done","session_id":"3b7...","message_id":"b21c...","citations":[...]}
 ```
+
+Generación de exámenes (CU-13). La tarea tarda decenas de minutos en CPU, así
+que informa su avance lote a lote; `progress` reserva un 5 % para la
+preparación del material y reparte el resto entre los lotes. Termina siempre en
+uno de los dos eventos finales, nunca en silencio:
+
+```json
+{"type":"notification","event":"exam.generation_progress","training_id":"5a2...","exam_id":"9e2...","step":"questions","progress":65,"questions":2,"total":3}
+{"type":"notification","event":"exam.generated","training_id":"5a2...","exam_id":"9e2...","questions":3}
+{"type":"notification","event":"exam.generation_failed","training_id":"5a2...","code":"INSUFFICIENT_CONTENT","message":"La capacitación necesita más material procesado…"}
+```
+
+`step`: `material` (selección de fragmentos) → `questions` (redacción, uno por
+lote) → `done`. Un examen que termina con cero preguntas se reporta como
+`exam.generation_failed` con `code: NO_QUESTIONS_GENERATED`, aunque la tarea
+Celery haya terminado sin excepción.
 
 ## 12. Seguridad y límites
 

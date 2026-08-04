@@ -16,6 +16,7 @@ from src.modules.ai.domain.rag_policies import AnswerGroundingVerifier
 from src.modules.assessments.domain.grading import tokens
 from src.modules.assessments.infrastructure.exam_generator import (
     ExamGenerator,
+    GenerationRequest,
     OptionOut,
     QuestionOut,
     _is_about_material,
@@ -134,6 +135,21 @@ def test_cada_lote_pide_un_solo_tipo_de_pregunta():
     assert all(len(batch) == 1 for batch in batches)
 
 
+def test_el_tope_corta_antes_de_persistir_el_excedente():
+    """
+    Un modelo pequeño ignora la cantidad solicitada y sigue redactando hasta
+    agotar sus tokens: se observó devolver 7 preguntas en un lote de 2. Sin el
+    tope, un examen de 10 preguntas acababa con 30.
+
+    Con `limit=0` no debe tocar la base de datos: si intentara persistir alguna,
+    la llamada fallaría por el examen nulo.
+    """
+    exceso = [
+        QuestionOut(type="TRUE_FALSE", statement=f"Enunciado numero {n}.") for n in range(7)
+    ]
+    assert ExamGenerator(llm=None)._persist(None, exceso, [], [], 0, limit=0) == 0
+
+
 def test_ningun_lote_excede_el_tamano_configurado():
     from django.conf import settings
 
@@ -149,6 +165,47 @@ def test_la_rotacion_reparte_el_material_entre_lotes():
     assert ExamGenerator._rotate(chunks, 1) == ["b", "c", "d", "a"]
     assert ExamGenerator._rotate(chunks, 6) == ["c", "d", "a", "b"]
     assert ExamGenerator._rotate([], 3) == []
+
+
+# ── Aviso de avance ──────────────────────────────────────────
+class _FakeExam:
+    id = "9e2eb00b-6b99-464d-8291-2196a8f0a972"
+
+
+def test_el_avance_informa_el_lote_y_el_total():
+    recibidos = []
+    request = GenerationRequest(
+        training=None, title="t", num_questions=10, on_progress=recibidos.append
+    )
+
+    ExamGenerator._report(request, _FakeExam(), step="questions", progress=40, questions=3)
+
+    assert recibidos == [
+        {
+            "exam_id": _FakeExam.id,
+            "step": "questions",
+            "progress": 40,
+            "questions": 3,
+            "total": 10,
+        }
+    ]
+
+
+def test_un_fallo_al_publicar_el_avance_no_aborta_la_generacion():
+    """Perder la barra de progreso es molesto; perder 40 minutos de trabajo, no."""
+
+    def explota(_payload):
+        raise RuntimeError("canal caído")
+
+    request = GenerationRequest(training=None, title="t", on_progress=explota)
+
+    ExamGenerator._report(request, _FakeExam(), step="done", progress=100, questions=5)
+
+
+def test_sin_destinatario_no_se_publica_avance():
+    request = GenerationRequest(training=None, title="t", on_progress=None)
+
+    ExamGenerator._report(request, _FakeExam(), step="done", progress=100, questions=5)
 
 
 # ── Anclaje al material ──────────────────────────────────────

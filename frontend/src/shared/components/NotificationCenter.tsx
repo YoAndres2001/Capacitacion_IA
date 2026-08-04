@@ -117,6 +117,18 @@ function describe(message: Extract<WsMessage, { type: 'notification' }>): Notifi
         path: `/examenes/${message.exam_id}/editor`,
         at: new Date(),
       };
+    case 'exam.generation_failed':
+      return {
+        id,
+        title: 'No se pudo generar el examen',
+        detail: String(message.message ?? 'La generación falló. Revise el material del curso.'),
+        // Un examen vacío sí existe y puede editarse a mano; sin `exam_id` la
+        // tarea murió antes de crearlo y solo cabe volver a la capacitación.
+        path: message.exam_id
+          ? `/examenes/${message.exam_id}/editor`
+          : `/capacitaciones/${message.training_id}/editor`,
+        at: new Date(),
+      };
     case 'MaterialProcessed':
       return {
         id,
