@@ -1,5 +1,5 @@
 [project]
-name = "capacita-ia-backend"
+name = "nexora-backend"
 version = "1.0.0"
 description = "Plataforma de capacitaciones con IA · backend Django + DRF"
 requires-python = ">=3.13"

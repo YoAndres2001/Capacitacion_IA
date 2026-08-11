@@ -61,7 +61,7 @@
 | RF-044 | Extraer conceptos clave con definición y ubicación en el material. | Must |
 | RF-045 | Generar preguntas frecuentes (FAQ) del material. | Should |
 | RF-046 | Generar embeddings y almacenarlos en FAISS con metadatos (proyecto, capacitación, material, timestamp, página). | Must |
-| RF-047 | El proveedor de LLM y de embeddings debe ser intercambiable por configuración (Ollama, OpenAI, otro) sin cambiar código de negocio. | Must |
+| RF-047 | El LLM y los embeddings se consumen a través de puertos (`LLMPort`, `EmbeddingsPort`); el código de negocio no conoce la implementación. Groq es el único proveedor externo y el modelo se configura por variable de entorno. | Must |
 | RF-048 | Chat por capacitación con RAG, historial y citas verificables. | Must |
 | RF-049 | El chat debe transmitir la respuesta token a token por WebSocket. | Should |
 | RF-050 | Agente IA con herramientas: buscar, resumir, explicar, comparar materiales, crear ejercicios, generar evaluación, explicar paso a paso, adaptar nivel. | Must |
@@ -166,4 +166,4 @@
 | RNF-60 | **NO utilizar Fable.** |
 | RNF-61 | Los WebSockets **NO** se ejecutan en el contenedor principal de Django (contenedor `websocket` con Channels + Daphne). |
 | RNF-62 | Toda la plataforma se ejecuta con Docker Compose (dev y prod). |
-| RNF-63 | El proveedor de IA por defecto debe ser **gratuito** (Ollama local), con OpenAI como alternativa opcional. |
+| RNF-63 | **Groq es el único proveedor externo de IA.** Los embeddings y la búsqueda vectorial se resuelven en local (SentenceTransformers + FAISS), sin llamadas externas. |

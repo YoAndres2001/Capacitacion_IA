@@ -103,8 +103,18 @@ export function ExamGeneratorDialog({ open, trainingId, onClose, onGenerated }: 
             </Typography>
             <Stack spacing={1.5} sx={{ mt: 1 }}>
               {TYPES.map((type) => (
-                <Stack key={type.key} direction="row" alignItems="center" spacing={2}>
-                  <Typography variant="body2" sx={{ minWidth: 150 }}>
+                <Stack
+                  key={type.key}
+                  direction="row"
+                  alignItems="center"
+                  spacing={{ xs: 1.5, sm: 2 }}
+                >
+                  {/* La etiqueta se encoge en teléfono para no dejar al slider
+                      sin recorrido usable. */}
+                  <Typography
+                    variant="body2"
+                    sx={{ minWidth: { xs: 96, sm: 150 }, flexShrink: 0, lineHeight: 1.25 }}
+                  >
                     {type.label}
                   </Typography>
                   <Slider

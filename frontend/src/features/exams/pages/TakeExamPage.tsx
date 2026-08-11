@@ -164,7 +164,9 @@ export default function TakeExamPage() {
         )}
       </Stack>
 
-      <Paper sx={{ p: 2, mb: 3, position: 'sticky', top: 72, zIndex: 2 }}>
+      {/* La barra de avance queda fija bajo el encabezado: su desplazamiento
+          debe coincidir con la altura del Toolbar, que es menor en teléfono. */}
+      <Paper sx={{ p: 2, mb: 3, position: 'sticky', top: { xs: 64, sm: 72 }, zIndex: 2 }}>
         <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.75 }}>
           <Typography variant="caption">
             {answered} de {questions.length} respondidas
@@ -197,7 +199,12 @@ export default function TakeExamPage() {
         incorrecta.
       </Alert>
 
-      <Stack direction="row" justifyContent="flex-end" spacing={1.5} sx={{ mt: 3, mb: 6 }}>
+      <Stack
+        direction={{ xs: 'column-reverse', sm: 'row' }}
+        justifyContent="flex-end"
+        spacing={1.5}
+        sx={{ mt: 3, mb: 6 }}
+      >
         <Button onClick={() => navigate(-1)}>Salir sin entregar</Button>
         <Button
           variant="contained"
@@ -242,7 +249,7 @@ function QuestionInput({
 
   return (
     <Card variant="outlined">
-      <CardContent sx={{ p: 2.5 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
         <Stack direction="row" spacing={1} sx={{ mb: 1.5 }} alignItems="center">
           <Chip label={index + 1} size="small" />
           <Chip label={QUESTION_TYPE_LABEL[question.type]} size="small" variant="outlined" />

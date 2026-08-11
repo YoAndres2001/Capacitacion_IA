@@ -62,11 +62,11 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
   return (
     <Stack spacing={3}>
       <Card>
-        <CardContent sx={{ p: 3 }}>
+        <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
           <Typography variant="h4" gutterBottom>
             Asignar participantes
           </Typography>
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 2 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 2 }}>
             <Autocomplete
               multiple
               sx={{ flex: 1 }}
@@ -84,7 +84,7 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
               startIcon={<PersonAdd />}
               disabled={selected.length === 0 || assign.isPending}
               onClick={() => assign.mutate(selected.map((user) => user.id))}
-              sx={{ alignSelf: { md: 'flex-start' }, height: 40 }}
+              sx={{ alignSelf: { sm: 'flex-start' }, height: 40, flexShrink: 0 }}
             >
               Asignar
             </Button>
@@ -94,21 +94,21 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
 
       <Card>
         <CardContent sx={{ p: 0 }}>
-          <Box sx={{ p: 3, pb: 1 }}>
+          <Box sx={{ p: { xs: 2, sm: 3 }, pb: 1 }}>
             <Typography variant="h4">
               Participantes ({enrollments.data?.length ?? 0})
             </Typography>
           </Box>
 
           {(enrollments.data?.length ?? 0) === 0 ? (
-            <Box sx={{ p: 3, pt: 0 }}>
+            <Box sx={{ p: { xs: 2, sm: 3 }, pt: 0 }}>
               <Typography variant="body2" color="text.secondary">
                 Aún no hay usuarios asignados a esta capacitación.
               </Typography>
             </Box>
           ) : (
             <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small">
+              <Table size="small" sx={{ minWidth: 700 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Usuario</TableCell>

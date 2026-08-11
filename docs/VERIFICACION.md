@@ -4,6 +4,13 @@ Registro de lo que se probó realmente sobre el sistema en marcha, no de lo que
 debería funcionar. Ejecutado el 2026-08-03 sobre Windows 11 + Docker Desktop,
 CPU sin GPU, con Ollama como proveedor de IA (costo US$ 0).
 
+> **Documento histórico.** Corresponde al estado del sistema *antes* de la
+> refactorización que dejó a **Groq como único proveedor externo de IA**. Se
+> conserva porque documenta defectos reales encontrados y corregidos, pero los
+> nombres de variables y modelos que aparecen aquí (`OLLAMA_*`, `faster-whisper`)
+> ya no existen. Para la configuración vigente, ver el README y
+> [docs/05-arquitectura.md](05-arquitectura.md).
+
 ## Infraestructura
 
 | Verificación | Resultado |

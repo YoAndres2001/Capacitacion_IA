@@ -25,9 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements/ /app/requirements/
 RUN pip install --upgrade pip && pip install -r requirements/base.txt
 
-# Usuario sin privilegios
+# Usuario sin privilegios.
+# `/app/.cache/huggingface` se crea aquí a propósito: es el punto de montaje del
+# volumen de modelos de embeddings, y Docker inicializa un volumen nuevo con los
+# permisos que tenga esa ruta en la imagen. Si no existiera, el volumen nacería
+# como root y el worker no podría escribir la descarga.
 RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser \
-    && mkdir -p /app/media /app/indices /app/staticfiles /app/tmp \
+    && mkdir -p /app/media /app/indices /app/staticfiles /app/tmp /app/.cache/huggingface \
     && chown -R appuser:appuser /app
 
 # ============ DEVELOPMENT ===================================
@@ -61,10 +65,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", \
      "--workers", "4", "--worker-class", "gthread", "--threads", "4", "--timeout", "120"]
 
-# ============ INGEST (ffmpeg + Whisper) =====================
-# Imagen especializada para la cola `ingest`: transcripción y
-# extracción de documentos. Solo esta etapa carga ffmpeg y los
-# modelos pesados, manteniendo livianas las demás.
+# ============ INGEST (ffmpeg + extracción) ==================
+# Imagen especializada para la cola `ingest`: extrae y trocea el
+# audio con ffmpeg antes de enviarlo a Groq Whisper, y extrae el
+# texto de los documentos. Solo esta etapa carga ffmpeg, OCR y
+# poppler, manteniendo livianas las demás.
 FROM base AS ingest
 
 USER root
@@ -77,10 +82,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install -r requirements/ai.txt && pip install -r requirements/prod.txt
 
-# Caché de modelos de Whisper dentro de la imagen/volumen
+# Caché del modelo local de embeddings (SentenceTransformers).
+# Se monta como volumen en compose para que todos los workers
+# compartan la descarga en vez de repetirla cada uno.
 ENV HF_HOME=/app/.cache/huggingface \
     XDG_CACHE_HOME=/app/.cache
-RUN mkdir -p /app/.cache && chown -R appuser:appuser /app/.cache
+RUN mkdir -p /app/.cache/huggingface && chown -R appuser:appuser /app/.cache
 
 COPY --chown=appuser:appuser . /app/
 USER appuser

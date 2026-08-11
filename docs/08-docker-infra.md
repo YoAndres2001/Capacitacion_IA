@@ -11,12 +11,14 @@
 | `postgres` | `postgres:17-alpine` | 5432 | Base de datos | 1 (+réplicas) |
 | `redis` | `redis:7-alpine` | 6379 | Broker Celery, cache, channel layer | 1 |
 | `celery-worker` | = backend | — | Cola `default` | N |
-| `celery-ingest` | = backend + ffmpeg | — | Cola `ingest` (transcripción, extracción) | N |
-| `celery-ai` | = backend | — | Cola `ai` (embeddings, LLM) | N |
+| `celery-ingest` | = backend + ffmpeg | — | Cola `ingest` (extracción, troceo de audio, embeddings) | N |
+| `celery-ai` | = backend | — | Cola `ai` (embeddings, LLM, reconstrucción de índices) | N |
 | `celery-beat` | = backend | — | Tareas programadas | **1** |
 | `flower` | `mher/flower` | 5555 | Monitoreo de Celery (solo dev/interno) | 1 |
-| `ollama` | `ollama/ollama` | 11434 | LLM + embeddings **gratuitos** locales | 1 |
 | `mailhog` | `mailhog/mailhog` | 8025 | Captura de correo en desarrollo | 1 (solo dev) |
+
+> **No hay ningún contenedor de IA.** Groq es un servicio externo al que se llama por HTTPS;
+> los embeddings y FAISS corren dentro de los propios workers.
 
 ## 2. Topología de red
 
@@ -39,16 +41,17 @@ graph LR
     subgraph "data_net (internal: true)"
         POSTGRES
         REDIS
-        OLLAMA
     end
+    GROQ[(Groq API · HTTPS)]
     NGINX --> FRONTEND & BACKEND & WEBSOCKET
     BACKEND & WEBSOCKET --> POSTGRES & REDIS
     CELERY_DEFAULT & CELERY_INGEST & CELERY_AI & CELERY_BEAT --> POSTGRES & REDIS
-    CELERY_AI & CELERY_INGEST & BACKEND --> OLLAMA
+    CELERY_AI & CELERY_INGEST & BACKEND --> GROQ
 ```
 
-`data_net` se declara `internal: true` en producción: PostgreSQL, Redis y Ollama no tienen salida ni
-entrada desde Internet.
+`data_net` se declara `internal: true` en producción: PostgreSQL y Redis no tienen salida ni
+entrada desde Internet. Las llamadas a Groq salen por `app_net` y `worker_net`, que sí la
+tienen; es el único destino externo de la capa de IA.
 
 ## 3. Volúmenes
 
@@ -59,7 +62,7 @@ entrada desde Internet.
 | `faiss_indices` | `/app/indices` | Índices FAISS por proyecto | Diario (reconstruible) |
 | `static_data` | `/app/staticfiles` | Estáticos de Django | No (se regenera) |
 | `redis_data` | `/data` | Persistencia AOF | Opcional |
-| `ollama_models` | `/root/.ollama` | Modelos descargados | No (se re-descargan) |
+| `hf_cache` | `/app/.cache/huggingface` | Modelo local de embeddings (~470 MB), compartido por todos los workers | No (se re-descarga) |
 
 ## 4. Estrategia de imágenes
 
@@ -96,9 +99,9 @@ ALLOWED_HOSTS=localhost,127.0.0.1,backend,nginx
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost
 
 # ── Base de datos ───────────────────────────────────────
-POSTGRES_DB=capacita
-POSTGRES_USER=capacita
-POSTGRES_PASSWORD=capacita
+POSTGRES_DB=nexora
+POSTGRES_USER=nexora
+POSTGRES_PASSWORD=nexora
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 
@@ -113,27 +116,25 @@ CACHE_URL=redis://redis:6379/3
 JWT_ACCESS_LIFETIME_MINUTES=30
 JWT_REFRESH_LIFETIME_DAYS=7
 
-# ── IA (proveedor desacoplado · gratis por defecto) ─────
-AI_PROVIDER=ollama                 # ollama | openai
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_LLM_MODEL=qwen2.5:1.5b-instruct   # CPU; con GPU: qwen2.5:7b-instruct
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_TIMEOUT=900
-AI_ANALYSIS_MAX_CHARS=6000         # texto por cadena de análisis
-OPENAI_API_KEY=
-OPENAI_LLM_MODEL=gpt-4o-mini
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+# ── Groq · ÚNICO proveedor externo de IA ────────────────
+# La clave se lee SOLO de esta variable; nunca va en código ni en la imagen.
+GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_LLM_MODEL=llama-3.3-70b-versatile
+GROQ_WHISPER_MODEL=whisper-large-v3
+GROQ_TIMEOUT=120
+GROQ_TRANSCRIBE_TIMEOUT=600
+AI_ANALYSIS_MAX_CHARS=20000        # texto por cadena de análisis
 
-# ── Whisper (gratis, local) ─────────────────────────────
-WHISPER_BACKEND=faster-whisper
-WHISPER_MODEL=small                # tiny|base|small|medium|large-v3
-WHISPER_DEVICE=cpu                 # cpu|cuda
-WHISPER_COMPUTE_TYPE=int8
+# ── Embeddings LOCALES (sin llamadas externas) ──────────
+EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_DEVICE=cpu
+EMBEDDING_BATCH_SIZE=32
 
 # ── RAG ─────────────────────────────────────────────────
 FAISS_INDEX_ROOT=/app/indices
-CHUNK_SIZE_TOKENS=800
-CHUNK_OVERLAP_TOKENS=120
+RAG_CHUNK_SIZE=800
+RAG_CHUNK_OVERLAP=120
 RETRIEVER_TOP_K=8
 RETRIEVER_MIN_SCORE=0.35
 HYBRID_SEARCH_ENABLED=1
@@ -147,7 +148,7 @@ MAX_DOCUMENT_SIZE_MB=100
 # ── Correo ──────────────────────────────────────────────
 EMAIL_HOST=mailhog
 EMAIL_PORT=1025
-DEFAULT_FROM_EMAIL=no-reply@capacita.local
+DEFAULT_FROM_EMAIL=no-reply@nexora.local
 FRONTEND_URL=http://localhost:5173
 ```
 
@@ -165,13 +166,18 @@ Responsabilidades:
 
 ```
 postgres (healthy) ─┐
-redis    (healthy) ─┼─→ migrate (job) ─→ backend ─→ nginx
-ollama   (healthy) ─┘                 ├─→ websocket
+redis    (healthy) ─┴─→ migrate (job) ─→ backend ─→ nginx
+                                      ├─→ websocket
                                       ├─→ celery-worker / ingest / ai
                                       └─→ celery-beat
 ```
 Todos los servicios dependientes usan `depends_on: condition: service_healthy`.
-El contenedor `ollama-init` descarga los modelos la primera vez (`ollama pull`) y termina.
+
+La capa de IA **no participa en el orden de arranque**: Groq es un servicio externo y el
+modelo de embeddings se carga de forma perezosa la primera vez que un worker lo necesita
+(y queda cacheado en el volumen `hf_cache`). Si falta `GROQ_API_KEY`, Django lo advierte al
+arrancar (`ai.W001`) pero el sistema levanta igual: solo las funciones de IA quedan
+inhabilitadas.
 
 ## 9. Observabilidad
 

@@ -59,7 +59,7 @@ export default function AttemptResultPage() {
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto' }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-        <IconButton onClick={() => navigate('/mis-cursos')} aria-label="Volver">
+        <IconButton onClick={() => navigate('/inicio')} aria-label="Volver">
           <ArrowBack />
         </IconButton>
         <Typography variant="body2" color="text.secondary">
@@ -74,7 +74,7 @@ export default function AttemptResultPage() {
           borderColor: data.passed ? 'success.main' : 'error.main',
         }}
       >
-        <CardContent sx={{ p: 3 }}>
+        <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
             justifyContent="space-between"
@@ -108,7 +108,7 @@ export default function AttemptResultPage() {
             </Alert>
           )}
 
-          <Stack direction="row" spacing={1.5} sx={{ mt: 2.5 }}>
+          <Stack direction="row" spacing={1.5} sx={{ mt: 2.5 }} flexWrap="wrap" useFlexGap>
             <Button
               startIcon={<MenuBook />}
               variant="outlined"
@@ -163,7 +163,7 @@ function ResultCard({
       variant="outlined"
       sx={{ borderLeft: 4, borderLeftColor: item.is_correct ? 'success.main' : 'error.main' }}
     >
-      <CardContent sx={{ p: 2.5 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
         <Stack direction="row" spacing={1.5} alignItems="flex-start">
           {item.is_correct ? (
             <CheckCircle color="success" />

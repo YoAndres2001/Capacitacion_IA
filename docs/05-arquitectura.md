@@ -6,11 +6,11 @@
 graph TB
     U[Usuario / Estudiante]
     A[Administrador / Instructor]
-    subgraph "Capacita IA"
+    subgraph "Nexora"
         SYS[Plataforma de Capacitaciones con IA]
     end
     SMTP[(Servidor SMTP)]
-    LLM[(Proveedor LLM<br/>Ollama local / OpenAI)]
+    LLM[(Groq<br/>LLM + Speech-to-Text<br/>ÚNICO proveedor externo de IA)]
     OBJ[(Almacenamiento de archivos<br/>Volumen / S3)]
 
     U -->|HTTPS + WSS| SYS
@@ -38,7 +38,7 @@ graph TB
     end
     subgraph Asíncrono
         W1[celery-worker-default]
-        W2[celery-worker-ingest<br/>ffmpeg + Whisper]
+        W2[celery-worker-ingest<br/>ffmpeg + extracción + embeddings locales]
         W3[celery-worker-ai]
         BEAT[celery-beat]
         FLOWER[flower · monitoreo]
@@ -48,8 +48,8 @@ graph TB
         RD[(Redis 7<br/>broker · cache · channel layer)]
         FS[(Volumen media<br/>+ índices FAISS)]
     end
-    subgraph IA
-        OLL[ollama<br/>LLM + embeddings gratis]
+    subgraph "IA externa"
+        GROQ[Groq API<br/>LLM + Whisper]
     end
 
     NGINX --> FE
@@ -63,8 +63,8 @@ graph TB
     W1 & W2 & W3 & BEAT --> PG
     W1 & W2 & W3 & BEAT --> RD
     W2 & W3 --> FS
-    W3 --> OLL
-    API --> OLL
+    W2 & W3 -->|HTTPS| GROQ
+    API -->|HTTPS| GROQ
     W2 & W3 -->|publica eventos| RD
     RD -->|group_send| WS
 ```
@@ -114,7 +114,7 @@ HTTP POST /api/v1/trainings/{id}/chat
    │   AnswerQuestionUseCase(retriever_port, llm_port, chat_repo).execute(dto)
    ▼ domain/services/citation_policy.py      ← regla pura: validar citas
    ▼ infrastructure/ai/faiss_retriever.py    ← implementa RetrieverPort
-   ▼ infrastructure/ai/ollama_provider.py    ← implementa LLMPort
+   ▼ infrastructure/providers/groq_provider.py  ← implementa LLMPort
    ▼ infrastructure/persistence/repositories/chat_repository.py
 ```
 
@@ -150,10 +150,10 @@ graph TD
         D3[Excepciones]
     end
     subgraph infrastructure
-        I1[OllamaProvider / OpenAIProvider] -.implementa.-> P1
-        I2[OllamaEmbeddings / OpenAIEmbeddings / HFLocal] -.-> P2
+        I1[GroqLLM] -.implementa.-> P1
+        I2[SentenceTransformerEmbeddings<br/>local] -.-> P2
         I3[FaissVectorStore] -.-> P3
-        I4[FasterWhisperTranscriber] -.-> P4
+        I4[GroqTranscriber] -.-> P4
         I5[PyMuPDF / Docx / Pptx / Txt] -.-> P5
         I6[LocalStorage / S3Storage] -.-> P6
         I7[RedisChannelPublisher] -.-> P7
@@ -179,8 +179,9 @@ graph TD
 | ADR-01 | Clean Architecture con módulos por dominio | Django "app-por-tabla" | Reglas de negocio testeables sin BD; permite extraer módulos a microservicios |
 | ADR-02 | FAISS con índice por proyecto | pgvector, Qdrant, Chroma | Requerido por el cliente; sin servicio extra; aislamiento natural. Se abstrae tras `VectorStorePort` para migrar |
 | ADR-03 | WebSocket en contenedor aparte (Daphne) | ASGI unificado | Restricción explícita del cliente; escala y falla de forma independiente |
-| ADR-04 | Ollama como proveedor por defecto | OpenAI | **Costo cero**, datos que no salen de la empresa; el puerto permite cambiar a OpenAI con una variable |
-| ADR-05 | `faster-whisper` en vez de `openai-whisper` | Whisper original, API de OpenAI | 4× más rápido en CPU, menor RAM, gratuito y local |
+| ADR-04 | **Groq como ÚNICO proveedor externo de IA** | Mantener varios proveedores conmutables | Inferencia de un modelo de 70B en segundos sin hardware propio y con nivel gratuito. Un solo proveedor elimina la matriz de combinaciones (LLM × embeddings × transcripción), una sola credencial y un solo modo de fallo que documentar y probar. `LLMPort` sigue existiendo: sostiene los dobles de prueba y deja abierta una migración futura |
+| ADR-04b | Embeddings **locales** con SentenceTransformers | Un segundo proveedor externo de embeddings | Groq no expone `/embeddings`. Calcularlos en el worker mantiene a Groq como único servicio externo, evita una segunda cuenta y deja el material dentro de la infraestructura. El modelo es pequeño y rinde bien en CPU |
+| ADR-05 | Transcripción con la API de Groq (`whisper-large-v3`) | `faster-whisper` local | Elimina la descarga de pesos y el cómputo pesado en el worker; `large-v3` transcribe mejor que el `small` que la CPU permitía. El precio es trocear el audio con ffmpeg y recalcular los timestamps globales, encapsulado en `GroqTranscriber` |
 | ADR-06 | Colas Celery separadas (`ingest`, `ai`, `default`) | Cola única | La transcripción es CPU-intensiva; no debe bloquear tareas cortas |
 | ADR-07 | Chunks como fuente de verdad en PostgreSQL | Solo en FAISS | Permite regenerar embeddings y cambiar de modelo/proveedor sin perder datos |
 | ADR-08 | RAG híbrido (vectorial + full-text) con RRF | Solo vectorial | Mejora *recall* en nombres propios, códigos y siglas del ERP |
@@ -237,7 +238,7 @@ sequenceDiagram
     participant API as backend (Django)
     participant R as Redis
     participant F as FAISS
-    participant L as Ollama
+    participant L as Groq
 
     U->>N: WSS /ws/chat/{session_id}/?token=JWT
     N->>WS: upgrade
@@ -273,8 +274,8 @@ sequenceDiagram
     participant Q as Redis (broker)
     participant W as celery-worker-ingest
     participant FF as ffmpeg
-    participant WH as faster-whisper
-    participant L as Ollama
+    participant WH as Groq Whisper
+    participant L as Groq
     participant F as FAISS
     participant WS as websocket
 
@@ -284,8 +285,8 @@ sequenceDiagram
     API-->>I: 201 {status: PENDING}
     W->>Q: consume
     W->>WS: estado PROCESSING
-    W->>FF: extraer audio wav 16k mono
-    FF-->>W: audio.wav
+    W->>FF: extraer audio FLAC 16k mono (+ trocear si excede el tope)
+    FF-->>W: audio.flac
     W->>WH: transcribe(audio)
     WH-->>W: segmentos con timestamps
     W->>WS: estado ANALYZING
@@ -322,15 +323,18 @@ graph TB
         subgraph "red: data (sin salida a internet)"
             PGX[(postgres:17)]
             RDX[(redis:7)]
-            OLX[ollama]
         end
-        VOL[(volúmenes: media, faiss_indices, postgres_data, ollama_models)]
+        VOL[(volúmenes: media, faiss_indices, postgres_data, hf_cache)]
     end
+    GROQ[(Groq API)]
     NX --> FE & BE1 & WS1
     BE1 & WS1 & CW1 & CW2 & CW3 & CB --> PGX & RDX
     BE1 & CW1 & CW2 --> VOL
-    CW2 & BE1 --> OLX
+    CW1 & CW2 & BE1 -->|HTTPS| GROQ
 ```
+
+> La red `data` es `internal: true`: PostgreSQL y Redis no tienen salida a internet.
+> Las llamadas a Groq salen desde las redes `app` y `workers`, que sí la tienen.
 
 ## 10. Evolución a microservicios
 

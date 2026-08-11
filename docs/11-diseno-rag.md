@@ -50,16 +50,23 @@ primer segmento y `end_time` del último → la cita apunta al minuto exacto.
 
 ## 4. Embeddings
 
-| Proveedor | Modelo por defecto | Dim. | Costo |
-|-----------|--------------------|------|-------|
-| **Ollama (por defecto)** | `nomic-embed-text` | 768 | **Gratis, local** |
-| Ollama alternativo | `mxbai-embed-large` | 1024 | Gratis, local |
-| OpenAI (opcional) | `text-embedding-3-small` | 1536 | De pago |
+Se calculan **en local** con SentenceTransformers, dentro del worker de Celery. No hay
+ninguna llamada externa: el texto de la empresa no sale de su infraestructura. Groq no
+interviene en esta etapa (su catálogo no expone `/embeddings`).
+
+| `EMBEDDING_MODEL` | Dim. | Cuándo usarlo |
+|-------------------|------|---------------|
+| **`paraphrase-multilingual-MiniLM-L12-v2`** (por defecto) | 384 | Español + inglés; el más liviano en CPU |
+| `paraphrase-multilingual-mpnet-base-v2` | 768 | Mejor calidad multilingüe; ~3× más lento |
+| `all-MiniLM-L6-v2` | 384 | Solo inglés; el más rápido |
 
 - Vectores **normalizados L2** → el producto interno de FAISS equivale a similitud coseno.
-- Procesamiento por lotes de 64 chunks con reintentos.
-- El modelo y la dimensión quedan registrados en `vector_collections`; cambiar de modelo obliga a
-  reconstrucción completa (detectado automáticamente por diferencia de dimensión).
+- Procesamiento por lotes (`EMBEDDING_BATCH_SIZE`, 32 por defecto).
+- El modelo y la dimensión quedan registrados en `vector_collections` y en el `meta.json` del
+  índice; cambiar de modelo obliga a reconstrucción completa. La incompatibilidad se detecta por
+  diferencia de dimensión y **nunca se mezclan vectores de dimensiones distintas**: el índice
+  viejo se descarta en memoria y el chat responde "sin contexto" hasta reconstruir con
+  `python manage.py rebuild_indices`.
 
 ## 5. Índice FAISS
 

@@ -7,10 +7,13 @@ import {
   Brightness4,
   Brightness7,
   Dashboard,
+  Home,
+  Insights,
   Logout,
   MenuBook,
   Menu as MenuIcon,
   People,
+  Route as RouteIcon,
   School,
 } from '@mui/icons-material';
 import {
@@ -32,14 +35,27 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useColorMode } from '@/app/colorMode';
 import { useAuth } from '@/features/auth/AuthContext';
+import { api } from '@/shared/api/client';
+import { endpoints } from '@/shared/api/endpoints';
+import type { AIHealth } from '@/shared/api/types';
+import { CompanyLogo } from '@/shared/components/CompanyLogo';
 import { NotificationCenter } from '@/shared/components/NotificationCenter';
 import { ROLE_LABEL } from '@/shared/utils/format';
 
 const DRAWER_WIDTH = 248;
+
+/**
+ * Ancho del cajón cuando se abre por encima del contenido (teléfonos y
+ * tabletas). En un teléfono de 360 px un cajón de 248 px deja apenas 112 px
+ * de contexto detrás; el `min` con `85vw` evita que tape la pantalla entera
+ * en los equipos más angostos.
+ */
+const TEMP_DRAWER_WIDTH = 'min(280px, 85vw)';
 
 interface NavItem {
   label: string;
@@ -48,18 +64,43 @@ interface NavItem {
   requires?: 'content' | 'users';
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { label: 'Panel', path: '/admin', icon: <Dashboard />, requires: 'content' },
-  { label: 'Proyectos', path: '/proyectos', icon: <Apps />, requires: 'content' },
-  { label: 'Capacitaciones', path: '/capacitaciones', icon: <MenuBook />, requires: 'content' },
-  { label: 'Usuarios', path: '/usuarios', icon: <People />, requires: 'users' },
-  { label: 'Analítica', path: '/analitica', icon: <Analytics />, requires: 'users' },
-  { label: 'Mis cursos', path: '/mis-cursos', icon: <School /> },
+interface NavGroup {
+  /** Título de la sección; sin título los ítems van sueltos arriba del menú. */
+  title?: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    items: [
+      { label: 'Inicio', path: '/inicio', icon: <Home /> },
+      { label: 'Academia', path: '/academia', icon: <School /> },
+    ],
+  },
+  {
+    title: 'Tu progreso',
+    items: [
+      { label: 'Rutas', path: '/rutas', icon: <RouteIcon /> },
+      { label: 'Progreso', path: '/progreso', icon: <Insights /> },
+    ],
+  },
+  {
+    title: 'Gestión',
+    items: [
+      { label: 'Panel', path: '/admin', icon: <Dashboard />, requires: 'content' },
+      { label: 'Proyectos', path: '/proyectos', icon: <Apps />, requires: 'content' },
+      { label: 'Capacitaciones', path: '/capacitaciones', icon: <MenuBook />, requires: 'content' },
+      { label: 'Usuarios', path: '/usuarios', icon: <People />, requires: 'users' },
+      { label: 'Analítica', path: '/analitica', icon: <Analytics />, requires: 'users' },
+    ],
+  },
 ];
 
 export function AppLayout() {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  // Teléfonos y tabletas (< 1025 px): el cajón se superpone al contenido. A
+  // partir de notebook queda fijo, que es donde sobra ancho para las dos cosas.
+  const isCompact = useMediaQuery(theme.breakpoints.down('md'));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
@@ -68,57 +109,84 @@ export function AppLayout() {
   const { user, logout } = useAuth();
   const { mode, toggle } = useColorMode();
 
-  const visibleItems = NAV_ITEMS.filter((item) => {
-    if (item.requires === 'content') return user?.permissions.manage_content;
-    if (item.requires === 'users') return user?.permissions.manage_users;
-    return true;
+  const health = useQuery({
+    queryKey: ['ai', 'health'],
+    queryFn: async () => (await api.get<AIHealth>(endpoints.ai.health)).data,
+    retry: false,
+    staleTime: 300_000,
   });
+
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
+      if (item.requires === 'content') return user?.permissions.manage_content;
+      if (item.requires === 'users') return user?.permissions.manage_users;
+      return true;
+    }),
+  })).filter((group) => group.items.length > 0);
 
   const go = (path: string) => {
     navigate(path);
-    if (isMobile) setDrawerOpen(false);
+    if (isCompact) setDrawerOpen(false);
   };
 
   const drawerContent = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Toolbar sx={{ px: 2.5 }}>
-        <School sx={{ mr: 1.5, color: 'primary.main' }} />
-        <Box>
-          <Typography variant="h5" sx={{ lineHeight: 1.1 }}>
-            Capacita IA
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {user?.company?.name ?? 'Plataforma'}
-          </Typography>
-        </Box>
+        <CompanyLogo companyName={user?.company?.name} />
       </Toolbar>
       <Divider />
-      <List sx={{ px: 1.5, py: 1, flex: 1 }}>
-        {visibleItems.map((item) => {
-          const selected =
-            location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
-          return (
-            <ListItemButton
-              key={item.path}
-              selected={selected}
-              onClick={() => go(item.path)}
-              sx={{ borderRadius: 2, mb: 0.5 }}
-            >
-              <ListItemIcon sx={{ minWidth: 40, color: selected ? 'primary.main' : undefined }}>
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText
-                primary={item.label}
-                primaryTypographyProps={{ fontWeight: selected ? 600 : 500, fontSize: 14 }}
-              />
-            </ListItemButton>
-          );
-        })}
-      </List>
+      <Box sx={{ px: 1.5, py: 1, flex: 1, overflowY: 'auto' }}>
+        {visibleGroups.map((group) => (
+          <Box key={group.title ?? 'principal'} sx={{ mb: 1 }}>
+            {group.title && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: 'block',
+                  px: 2,
+                  pt: 1.5,
+                  pb: 0.5,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                {group.title}
+              </Typography>
+            )}
+            <List disablePadding>
+              {group.items.map((item) => {
+                const selected =
+                  location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
+                return (
+                  <ListItemButton
+                    key={item.path}
+                    selected={selected}
+                    onClick={() => go(item.path)}
+                    sx={{ borderRadius: 2, mb: 0.5 }}
+                  >
+                    <ListItemIcon
+                      sx={{ minWidth: 40, color: selected ? 'primary.main' : undefined }}
+                    >
+                      {item.icon}
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={item.label}
+                      primaryTypographyProps={{ fontWeight: selected ? 600 : 500, fontSize: 14 }}
+                    />
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          </Box>
+        ))}
+      </Box>
       <Divider />
       <Box sx={{ p: 2 }}>
         <Typography variant="caption" color="text.secondary">
-          IA local gratuita · Ollama
+          {health.data ? `IA · ${health.data.provider} · ${health.data.llm_model}` : 'IA'}
         </Typography>
       </Box>
     </Box>
@@ -138,17 +206,22 @@ export function AppLayout() {
           backdropFilter: 'blur(8px)',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3 }, gap: 0.5 }}>
           <IconButton
             edge="start"
             onClick={() => setDrawerOpen(true)}
-            sx={{ mr: 2, display: { md: 'none' } }}
+            sx={{ mr: { xs: 0.5, sm: 1.5 }, display: { md: 'none' } }}
             aria-label="Abrir menú"
           >
             <MenuIcon />
           </IconButton>
 
-          <Box sx={{ flexGrow: 1 }} />
+          {/* Con el cajón oculto la barra se queda sin marca: se repone aquí. */}
+          <Box sx={{ display: { xs: 'flex', md: 'none' }, minWidth: 0, flex: 1 }}>
+            <CompanyLogo companyName={user?.company?.name} />
+          </Box>
+
+          <Box sx={{ flexGrow: 1, display: { xs: 'none', md: 'block' } }} />
 
           <Tooltip title={mode === 'light' ? 'Modo oscuro' : 'Modo claro'}>
             <IconButton onClick={toggle} aria-label="Cambiar tema">
@@ -212,13 +285,15 @@ export function AppLayout() {
 
       <Box component="nav" sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
         <Drawer
-          variant={isMobile ? 'temporary' : 'permanent'}
-          open={isMobile ? drawerOpen : true}
+          variant={isCompact ? 'temporary' : 'permanent'}
+          open={isCompact ? drawerOpen : true}
           onClose={() => setDrawerOpen(false)}
+          // `keepMounted` mantiene el menú en el DOM: en móvil abrir el cajón
+          // debe ser instantáneo, no volver a montar toda la navegación.
           ModalProps={{ keepMounted: true }}
           sx={{
             '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
+              width: isCompact ? TEMP_DRAWER_WIDTH : DRAWER_WIDTH,
               boxSizing: 'border-box',
               borderRight: 1,
               borderColor: 'divider',
@@ -233,13 +308,28 @@ export function AppLayout() {
         component="main"
         sx={{
           flexGrow: 1,
+          // `minWidth: 0` es lo que permite que un hijo ancho (tabla, gráfico)
+          // se desplace dentro de su caja en vez de estirar el layout flex.
+          minWidth: 0,
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           bgcolor: 'background.default',
           minHeight: '100vh',
         }}
       >
         <Toolbar />
-        <Box sx={{ p: { xs: 2, md: 3 } }}>
+        <Box
+          sx={{
+            // Los márgenes y el ancho máximo salen de las media queries de
+            // `index.css`, así los cuatro tamaños se ajustan en un solo lugar.
+            width: '100%',
+            maxWidth: 'var(--app-max-width)',
+            mx: 'auto',
+            pt: 'var(--app-gutter)',
+            pb: 'calc(var(--app-gutter) + var(--app-safe-bottom))',
+            pl: 'calc(var(--app-gutter) + var(--app-safe-left))',
+            pr: 'calc(var(--app-gutter) + var(--app-safe-right))',
+          }}
+        >
           <Outlet />
         </Box>
       </Box>

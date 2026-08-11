@@ -51,7 +51,7 @@ export default function LoginPage() {
     setServerError('');
     try {
       const user = await login(values.email, values.password);
-      navigate(user.permissions.manage_content ? '/admin' : '/mis-cursos', { replace: true });
+      navigate(user.permissions.manage_content ? '/admin' : '/inicio', { replace: true });
     } catch (error) {
       setServerError(errorMessage(error));
     }
@@ -74,7 +74,7 @@ export default function LoginPage() {
         <CardContent sx={{ p: 4 }}>
           <Stack alignItems="center" spacing={1} sx={{ mb: 3 }}>
             <School sx={{ fontSize: 44, color: 'primary.main' }} />
-            <Typography variant="h2">Capacita IA</Typography>
+            <Typography variant="h2">Nexora</Typography>
             <Typography variant="body2" color="text.secondary" textAlign="center">
               Plataforma de capacitaciones con Inteligencia Artificial
             </Typography>

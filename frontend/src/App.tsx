@@ -10,11 +10,12 @@ import { AuthProvider } from '@/features/auth/AuthContext';
 import { ColorModeContext, type ColorMode } from '@/app/colorMode';
 import { SnackbarProvider } from '@/shared/components/SnackbarProvider';
 
-const MODE_KEY = 'capacita.colorMode';
+const MODE_KEY = 'nexora.colorMode';
 
 export default function App() {
+  // El modo oscuro es el predeterminado; solo se respeta la elección guardada.
   const [mode, setMode] = useState<ColorMode>(
-    () => (localStorage.getItem(MODE_KEY) as ColorMode) ?? 'light',
+    () => (localStorage.getItem(MODE_KEY) as ColorMode | null) ?? 'dark',
   );
 
   const colorMode = useMemo(

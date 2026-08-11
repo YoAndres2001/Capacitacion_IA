@@ -106,7 +106,7 @@ export default function ProfilePage() {
         <Grid size={{ xs: 12, md: 8 }}>
           <Stack spacing={3}>
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h4" gutterBottom>
                   Datos personales
                 </Typography>
@@ -143,7 +143,7 @@ export default function ProfilePage() {
             </Card>
 
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h4" gutterBottom>
                   Cambiar contraseña
                 </Typography>

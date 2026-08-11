@@ -11,7 +11,7 @@ read -r -p "Escriba 'CONFIRMAR' para continuar: " answer
 
 echo "==> Restaurando $DUMP"
 gunzip -c "$DUMP" | docker compose exec -T postgres psql \
-  -U "${POSTGRES_USER:-capacita}" -d "${POSTGRES_DB:-capacita}"
+  -U "${POSTGRES_USER:-nexora}" -d "${POSTGRES_DB:-nexora}"
 
 echo "==> Aplicando migraciones pendientes"
 docker compose exec -T backend python manage.py migrate --noinput

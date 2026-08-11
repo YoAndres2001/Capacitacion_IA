@@ -1,8 +1,8 @@
 """
-Mide la latencia real del proveedor de IA configurado.
+Mide la latencia real de Groq y de los embeddings locales.
 
-Sirve para elegir el modelo correcto según el hardware antes de procesar
-material de verdad.
+Sirve para elegir el modelo correcto (GROQ_LLM_MODEL, EMBEDDING_MODEL) antes de
+procesar material de verdad.
 
 Uso:  python manage.py ai_bench
 """
@@ -18,7 +18,7 @@ from src.shared.container import get_embeddings, get_llm
 
 
 class Command(BaseCommand):
-    help = "Diagnóstico de rendimiento del proveedor de IA (LLM y embeddings)."
+    help = "Diagnóstico de rendimiento de Groq (LLM) y de los embeddings locales."
 
     def handle(self, *args, **options) -> None:
         llm = get_llm()
@@ -27,7 +27,9 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(f"Proveedor .............. {llm.provider_name}")
         self.stdout.write(f"Modelo LLM ............. {llm.model_name}")
-        self.stdout.write(f"Modelo de embeddings ... {embeddings.model_name}")
+        self.stdout.write(
+            f"Modelo de embeddings ... {embeddings.model_name} ({embeddings.provider_name})"
+        )
 
         available = llm.is_available()
         self.stdout.write(
@@ -40,10 +42,16 @@ class Command(BaseCommand):
 
         self.stdout.write("\n" + "-" * 62)
 
+        # Los embeddings son locales y el LLM remoto: un fallo al cargar el
+        # modelo local no debe ocultar el resto del diagnóstico.
         started = time.monotonic()
-        vector = embeddings.embed_query("inventario cíclico")
-        elapsed = time.monotonic() - started
-        self.stdout.write(f"Embedding de consulta ... {len(vector)} dims · {elapsed:.1f} s")
+        try:
+            vector = embeddings.embed_query("inventario cíclico")
+        except Exception as exc:
+            self.stdout.write(self.style.ERROR(f"Embedding de consulta ... falló: {exc}"))
+        else:
+            elapsed = time.monotonic() - started
+            self.stdout.write(f"Embedding de consulta ... {len(vector)} dims · {elapsed:.1f} s")
 
         started = time.monotonic()
         response = llm.generate(
@@ -97,8 +105,9 @@ class Command(BaseCommand):
         else:
             self.stdout.write(
                 self.style.ERROR(
-                    "Demasiado lento: el análisis superará OLLAMA_TIMEOUT y los materiales "
-                    "quedarán con partial_analysis.\n"
-                    "Use un modelo menor (OLLAMA_LLM_MODEL=qwen2.5:1.5b-instruct) o una GPU."
+                    "Demasiado lento para ser Groq: casi siempre significa límite de uso "
+                    "(429) con reintentos de por medio.\n"
+                    "Revise la cuota en https://console.groq.com o pruebe "
+                    "GROQ_LLM_MODEL=llama-3.1-8b-instant."
                 )
             )

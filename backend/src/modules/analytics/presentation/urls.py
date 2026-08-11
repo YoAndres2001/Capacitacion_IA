@@ -4,6 +4,7 @@ from .views import (
     AIUsageReportView,
     ExamResultsReportView,
     ExportView,
+    MyActivityView,
     MyStatsView,
     OverviewView,
     ProgressReportView,
@@ -16,4 +17,5 @@ urlpatterns = [
     path("ai-usage", AIUsageReportView.as_view(), name="analytics-ai-usage"),
     path("export", ExportView.as_view(), name="analytics-export"),
     path("me", MyStatsView.as_view(), name="analytics-me"),
+    path("me/activity", MyActivityView.as_view(), name="analytics-me-activity"),
 ]

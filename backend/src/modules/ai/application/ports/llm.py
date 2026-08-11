@@ -1,8 +1,10 @@
 """
 Puerto del modelo de lenguaje (RF-047).
 
-Cualquier proveedor (Ollama local gratuito, OpenAI, otro) implementa esta
-interfaz. El dominio y los casos de uso solo conocen este contrato.
+El dominio y los casos de uso solo conocen este contrato; la implementación
+productiva es `GroqLLM`, el único proveedor externo de la plataforma. El puerto
+se mantiene porque es lo que permite probar el pipeline con dobles sin llamar a
+la API real.
 """
 
 from __future__ import annotations
@@ -68,12 +70,13 @@ class LLMPort(ABC):
         """
         Salida estructurada.
 
-        Indispensable con modelos locales pequeños: el proveedor fuerza el modo
-        JSON y el llamador valida con Pydantic.
+        Con `schema` se pide Structured Outputs (JSON Schema estricto) cuando el
+        modelo lo admite; si no, se cae a modo JSON y el llamador valida con
+        Pydantic y reintenta de forma correctiva.
 
-        `max_tokens` importa más de lo que parece en CPU: el tiempo de respuesta
-        es casi proporcional a los tokens generados, así que acotar la salida es
-        la palanca más directa para que el análisis termine en minutos.
+        Acotar `max_tokens` es la palanca más directa sobre la latencia y sobre
+        la cuota por minuto de Groq, que descuenta el máximo declarado aunque no
+        se llegue a usar.
         """
 
     @abstractmethod

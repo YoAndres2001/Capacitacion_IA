@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import csv
 
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.db.models.functions import Coalesce, TruncDate
 from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -16,7 +17,12 @@ from src.modules.accounts.infrastructure.models import User
 from src.modules.ai.infrastructure.models import AIUsageLog, ChatMessage, Chunk
 from src.modules.assessments.infrastructure.models import Attempt, Exam
 from src.modules.projects.infrastructure.models import Project
-from src.modules.trainings.infrastructure.models import Enrollment, Material, Training
+from src.modules.trainings.infrastructure.models import (
+    Enrollment,
+    LessonProgress,
+    Material,
+    Training,
+)
 from src.shared.presentation.permissions import IsAdmin
 
 
@@ -288,7 +294,114 @@ class MyStatsView(APIView):
         )
 
 
+class MyActivityView(APIView):
+    """Actividad de aprendizaje del estudiante para la vista «Progreso».
+
+    Devuelve la serie diaria de tiempo dedicado y el detalle por capacitación.
+
+    La actividad se atribuye al día de `last_viewed_at` —la marca que escribe el
+    reproductor— y, si no existe, al de `completed_at`. Esa segunda opción no es
+    un adorno: una lección marcada como completada a mano nunca pasa por el
+    reproductor, así que sin ella un alumno que termina un curso entero ve una
+    página que le dice que no hizo nada. El tiempo de estudio de esas lecciones
+    sigue siendo 0, que es lo cierto; lo que se corrige es que existan.
+
+    No hay bitácora por sesión: el tiempo es el acumulado de cada lección, no la
+    suma de visitas.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Analítica"],
+        parameters=[OpenApiParameter("days", int, description="Ventana en días (1-90, def. 7)")],
+        summary="Mi actividad reciente",
+    )
+    def get(self, request):
+        days = _clamp_days(request.query_params.get("days"))
+        today = timezone.localdate()
+        start = today - timezone.timedelta(days=days - 1)
+
+        records = (
+            LessonProgress.objects.filter(enrollment__user=request.user)
+            .annotate(activity_at=Coalesce("last_viewed_at", "completed_at"))
+            .filter(activity_at__isnull=False)
+        )
+        in_range = records.filter(activity_at__date__gte=start)
+
+        by_day = {
+            row["day"]: row
+            for row in in_range.annotate(day=TruncDate("activity_at"))
+            .values("day")
+            .annotate(seconds=Sum("watched_seconds"), lessons=Count("id"))
+        }
+        daily = [
+            {
+                "date": (day := start + timezone.timedelta(days=offset)).isoformat(),
+                "seconds": int(by_day.get(day, {}).get("seconds") or 0),
+                "lessons": int(by_day.get(day, {}).get("lessons") or 0),
+            }
+            for offset in range(days)
+        ]
+
+        enrollments = {
+            enrollment.id: enrollment
+            for enrollment in Enrollment.objects.filter(user=request.user).select_related(
+                "training__project"
+            )
+        }
+        by_training = (
+            records.values("enrollment_id")
+            .annotate(
+                seconds=Sum("watched_seconds"),
+                lessons=Count("id"),
+                completed=Count("id", filter=Q(completed=True)),
+                last_viewed_at=Max("activity_at"),
+            )
+            .order_by("-last_viewed_at")
+        )
+
+        trainings = []
+        for row in by_training:
+            enrollment = enrollments.get(row["enrollment_id"])
+            if enrollment is None:
+                continue
+            trainings.append(
+                {
+                    "training_id": str(enrollment.training_id),
+                    "title": enrollment.training.title,
+                    "project_name": enrollment.training.project.name,
+                    "status": enrollment.status,
+                    "progress": float(enrollment.progress),
+                    "seconds": int(row["seconds"] or 0),
+                    "lessons_viewed": row["lessons"],
+                    "lessons_completed": row["completed"],
+                    "last_viewed_at": row["last_viewed_at"],
+                }
+            )
+
+        return Response(
+            {
+                "range": {"start": start.isoformat(), "end": today.isoformat(), "days": days},
+                "daily": daily,
+                "totals": {
+                    "seconds": sum(item["seconds"] for item in daily),
+                    "lessons": sum(item["lessons"] for item in daily),
+                    "trainings": len(trainings),
+                },
+                "trainings": trainings,
+            }
+        )
+
+
 # ── Utilidades ───────────────────────────────────────────────
+def _clamp_days(raw: str | None, default: int = 7) -> int:
+    try:
+        return max(1, min(90, int(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _pass_rate(attempts) -> float:
     graded = attempts.filter(status=Attempt.Status.GRADED)
     total = graded.count()
@@ -313,8 +426,6 @@ def _progress_queryset(request):
 
 
 def _ai_summary(company_id, *, detailed: bool = False) -> dict:
-    from django.db.models import Sum
-
     usage = AIUsageLog.objects.filter(company_id=company_id)
     totals = usage.aggregate(
         calls=Count("id"),

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-#  Capacita IA · Docker Compose · ENTORNO DE PRODUCCIÓN
+#  Nexora · Docker Compose · ENTORNO DE PRODUCCIÓN
 #  Uso:  docker compose -f docker-compose.prod.yml up -d
 #  Escala: docker compose -f docker-compose.prod.yml up -d --scale backend=4
 # ─────────────────────────────────────────────────────────────
@@ -10,6 +10,8 @@ x-backend-env: &backend-env
     DJANGO_SETTINGS_MODULE: config.settings.prod
     PYTHONUNBUFFERED: "1"
     PYTHONDONTWRITEBYTECODE: "1"
+    # Caché compartida del modelo de embeddings local (SentenceTransformers).
+    HF_HOME: /app/.cache/huggingface
 
 x-backend-build: &backend-build
   build:
@@ -22,6 +24,7 @@ x-backend-volumes: &backend-volumes
     - media_data:/app/media
     - faiss_indices:/app/indices
     - static_data:/app/staticfiles
+    - hf_cache:/app/.cache/huggingface
 
 x-restart: &restart
   restart: unless-stopped
@@ -62,22 +65,6 @@ services:
     deploy:
       resources:
         limits: {cpus: "1", memory: 1G}
-    networks: [data_net]
-
-  ollama:
-    image: ollama/ollama:latest
-    <<: *restart
-    volumes:
-      - ollama_models:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    deploy:
-      resources:
-        limits: {cpus: "6", memory: 12G}
     networks: [data_net]
 
   migrate:
@@ -226,11 +213,11 @@ volumes:
   media_data:
   faiss_indices:
   static_data:
-  ollama_models:
+  hf_cache:
 
 networks:
   edge_net:
   app_net:
   worker_net:
   data_net:
-    internal: true          # PostgreSQL, Redis y Ollama sin acceso a Internet
+    internal: true          # PostgreSQL y Redis sin acceso a Internet

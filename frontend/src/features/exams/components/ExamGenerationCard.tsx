@@ -70,8 +70,9 @@ export function ExamGenerationCard({ generation, onDismiss }: Props) {
           sx={{ mt: 1.5 }}
         >
           <Typography variant="caption" color="text.secondary">
-            {generation.questions} de {generation.total} preguntas redactadas. En CPU el modelo
-            tarda varios minutos por lote; puedes cerrar esta página y volver más tarde.
+            {generation.questions} de {generation.total} preguntas redactadas. Si el proveedor
+            aplica su límite de uso por minuto, el lote espera y reanuda solo; puedes cerrar esta
+            página y volver más tarde.
           </Typography>
           {/* Salida de emergencia: si el worker muriera sin avisar, sin esto el
               botón de generar quedaría bloqueado hasta que caduque el registro. */}

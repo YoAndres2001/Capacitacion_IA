@@ -102,8 +102,10 @@ backend/
     │   │   │       ├── run_agent.py
     │   │   │       └── rebuild_index.py
     │   │   ├── infrastructure/
-    │   │   │   ├── providers/              # ollama.py, openai_provider.py, factory.py
-    │   │   │   ├── transcription/          # faster_whisper.py, ffmpeg.py
+    │   │   │   ├── providers/              # groq_provider.py, groq_http.py,
+    │   │   │   │                           # sentence_transformers_provider.py,
+    │   │   │   │                           # parsing.py, factory.py
+    │   │   │   ├── transcription/          # groq_whisper.py, ffmpeg.py
     │   │   │   ├── extraction/             # pdf.py, docx.py, pptx.py, txt.py, factory.py
     │   │   │   ├── vectorstore/            # faiss_store.py, index_manager.py
     │   │   │   ├── rag/                    # chunker.py, retriever.py, prompts.py

@@ -31,6 +31,8 @@ urlpatterns = [
         UploadChunkView.as_view(),
         name="upload-complete",
     ),
-    path("media/<str:token>", serve_protected_media, name="protected-media"),
+    # `path:` y no `str:` porque el token firmado incluye la ruta relativa del
+    # archivo y, por tanto, barras.
+    path("media/<path:token>", serve_protected_media, name="protected-media"),
     path("", include(router.urls)),
 ]

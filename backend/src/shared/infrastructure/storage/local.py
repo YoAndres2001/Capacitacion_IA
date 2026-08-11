@@ -24,7 +24,7 @@ class LocalStorage(StoragePort):
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root or settings.MEDIA_ROOT)
         self.root.mkdir(parents=True, exist_ok=True)
-        self._signer = TimestampSigner(salt="capacita.media")
+        self._signer = TimestampSigner(salt="nexora.media")
 
     # ── Escritura/lectura ────────────────────────────────────
     def save(self, relative_path: str, content: BinaryIO) -> str:

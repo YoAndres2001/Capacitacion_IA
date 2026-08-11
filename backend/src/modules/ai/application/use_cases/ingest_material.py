@@ -183,7 +183,9 @@ class IngestMaterialUseCase(UseCase[IngestInput, IngestOutput]):
                     material.thumbnail = relative
                     material.save(update_fields=["thumbnail", "updated_at"])
 
-            audio_path = ffmpeg.extract_audio(source, work_dir / "audio.wav")
+            # La extensión importa: ffmpeg deduce el contenedor de ella y el
+            # códec es FLAC (ver `extract_audio`), no PCM.
+            audio_path = ffmpeg.extract_audio(source, work_dir / "audio.flac")
 
             job.step = "transcription"
             job.save(update_fields=["step"])

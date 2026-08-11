@@ -1,14 +1,30 @@
-# Capacita IA · Plataforma de Capacitaciones con Inteligencia Artificial
+# Nexora · Plataforma de Capacitaciones con Inteligencia Artificial
 
 Clon funcional de una plataforma de capacitaciones (concepto Plazzi) construido sobre **React + Django**,
 con una capa de IA que transcribe videos, indexa documentos, responde por RAG, actúa como tutor virtual
 y genera y corrige exámenes automáticamente.
 
-> **La IA es 100 % gratuita por defecto**: Ollama local (LLM + embeddings) y `faster-whisper` local
-> para transcripción. No se necesita ninguna API key. OpenAI queda disponible como alternativa
-> cambiando una sola variable de entorno.
+> **Groq es el único proveedor externo de Inteligencia Artificial utilizado por
+> Capacita IA.** No hay ningún otro servicio de IA al que se hagan llamadas.
+>
+> **La única clave que necesitas es `GROQ_API_KEY`** (gratuita, https://console.groq.com/keys).
+> Se lee exclusivamente de la variable de entorno; nunca se escribe en el código.
 
 ---
+
+## Qué hace cada pieza de la capa de IA
+
+| Componente | Dónde corre | De qué se encarga |
+|------------|-------------|-------------------|
+| **Groq** (`llama-3.3-70b-versatile`) | Servicio externo | LLM: chat/tutor, análisis (resumen, conceptos, capítulos, FAQ), generación de exámenes, corrección de respuestas abiertas, respuesta final del RAG |
+| **Groq Whisper** (`whisper-large-v3`) | Servicio externo | Speech-to-Text de videos y audio, **con timestamps por segmento** |
+| **SentenceTransformers** | Local, en el worker | Embeddings del RAG. No es un proveedor externo: el texto no sale de la infraestructura |
+| **FAISS** | Local, en disco | Búsqueda vectorial. Tampoco es un servicio externo |
+| **FFmpeg** | Local, en el worker | Extrae, comprime y trocea el audio antes de enviarlo a Groq |
+| **PyMuPDF · python-docx · python-pptx** | Local | Extracción de texto de PDF, DOCX y PPTX |
+
+El documento nunca se envía completo a Groq: se extrae y trocea en local, se indexa
+en FAISS y solo viajan los fragmentos relevantes de cada consulta.
 
 ## Stack
 
@@ -17,43 +33,63 @@ y genera y corrige exámenes automáticamente.
 | Frontend | React 19 · Vite · TypeScript · Material UI · React Router · TanStack Query · Axios · React Hook Form · Zod |
 | Backend | Django 5 · Django REST Framework · Python 3.13 · PostgreSQL 17 · Celery · Redis · JWT |
 | Tiempo real | Django Channels + Daphne (**contenedor independiente**) |
-| IA | LangChain · LangGraph · FAISS · Ollama (gratis) / OpenAI · faster-whisper · PyMuPDF · python-docx · python-pptx |
+| IA | Groq (LLM + Whisper) · LangGraph (agente tutor) · SentenceTransformers (embeddings locales) · FAISS · FFmpeg · PyMuPDF · python-docx · python-pptx |
 | Infra | Docker Compose (dev y prod) · nginx · Gunicorn · Flower |
 | Arquitectura | Clean Architecture · SOLID · multi-tenant |
 
 ## Requisitos
 
 - Docker Desktop 24+ con Docker Compose v2
-- 8 GB de RAM y 4 núcleos como mínimo (con el modelo por defecto)
-- ~15 GB de disco para modelos, media e índices
+- 6 GB de RAM (ningún LLM corre en tu máquina; sí el modelo de embeddings, que es
+  pequeño) y ~12 GB de disco para media, índices y el modelo de embeddings
+- Una `GROQ_API_KEY` gratuita: https://console.groq.com/keys
 
-### Elegir el modelo según tu hardware
+### Elegir el modelo de Groq
 
-El modelo por defecto (`qwen2.5:1.5b-instruct`) está elegido para funcionar en **CPU**,
-sin GPU y compartiendo la máquina con otros procesos. Si tienes más potencia, súbelo:
+| `GROQ_LLM_MODEL` | Cuándo usarlo |
+|------------------|---------------|
+| `llama-3.3-70b-versatile` (por defecto) | Mejor equilibrio calidad/velocidad; JSON estructurado fiable |
+| `llama-3.1-8b-instant` | Máxima velocidad y menor costo; falla más al generar exámenes |
+| `openai/gpt-oss-120b` | Mejor razonamiento; más lento y con cuota gratuita más ajustada |
 
-| Hardware | `OLLAMA_LLM_MODEL` | Tamaño | Análisis de un documento |
-|----------|--------------------|--------|--------------------------|
-| CPU 4 núcleos (por defecto) | `qwen2.5:1.5b-instruct` | ~1 GB | 1–3 min |
-| CPU 8+ núcleos | `llama3.2:3b-instruct` | ~2 GB | 3–8 min |
-| GPU NVIDIA | `qwen2.5:7b-instruct` | ~4.7 GB | < 1 min · mejor calidad |
+> **Salida estructurada.** El adaptador pide *Structured Outputs* (`json_schema` estricto)
+> y, si el modelo no los admite, degrada a modo JSON + validación Pydantic con reintento
+> correctivo. Medido contra la API en agosto de 2026, **ningún modelo de chat del nivel
+> gratuito admite `json_schema`**, así que el camino real es el segundo: el 400 se recibe
+> una sola vez por proceso y queda recordado. Si un modelo gana soporte, se activa solo.
 
-Un modelo grande en CPU **no falla en silencio**: el material queda `AVAILABLE` con
-`partial_analysis` (el chat RAG funciona porque los embeddings sí se generaron) y el log
-indica que se superó `OLLAMA_TIMEOUT`. En ese caso, baja de modelo o reduce
-`AI_ANALYSIS_MAX_CHARS`.
+### El límite que de verdad manda: 12.000 tokens por minuto
+
+El nivel gratuito de Groq da ~1.000 peticiones al día pero solo **12.000 tokens por
+minuto**, y descuenta el prompt *más el máximo de salida reservado* aunque no se use.
+Por eso `LLM_MAX_TOKENS`, `AI_ANALYSIS_MAX_CHARS` y `AI_EXAM_BATCH_SIZE` vienen ajustados
+para que cada llamada cueste ~4.000 tokens: subirlos "por si acaso" provoca 429.
+
+Cuando se toca el límite, el proveedor lee de la respuesta cuánto hay que esperar
+(`retry-after` o `x-ratelimit-reset-tokens`) y reintenta cuando la cuota se repone, hasta
+70 s. Si aun así no pasa, el material queda `AVAILABLE` con `partial_analysis`: el chat
+RAG sigue funcionando porque los embeddings son locales y no dependen de Groq.
+
+Ver la cuota restante en cualquier momento:
+
+```bash
+docker compose exec backend python manage.py ai_bench
+```
 
 ## Arranque rápido
 
 ```bash
 cp .env.example .env
+# edita .env: pon tu GROQ_API_KEY
 docker compose up -d
 ```
 
-La primera vez, `ollama-init` descarga los modelos (varios minutos). Seguir el avance con:
+La primera vez que un worker calcula embeddings descarga el modelo local
+(~470 MB) en un volumen compartido; las siguientes veces arranca al instante.
+Seguir el avance:
 
 ```bash
-docker compose logs -f ollama-init
+docker compose logs -f celery-ingest
 ```
 
 Cuando termine:
@@ -68,29 +104,27 @@ Cuando termine:
 | MailHog (correo dev) | http://localhost:8026 |
 
 > Los puertos publicados se configuran con las variables `PORT_*` del `.env`.
-> Vienen en un bloque poco común (8088, 8010, 8011, 5442, 6389, 11435…) para no
+> Vienen en un bloque poco común (8088, 8010, 8011, 5442, 6389…) para no
 > chocar con otros proyectos que ya estén corriendo en la máquina.
 
-### Dos contenedores aparecen detenidos: es correcto
+### Un contenedor aparece detenido: es correcto
 
-`docker compose ps -a` muestra siempre **`migrate` y `ollama-init` como `Exited (0)`**.
-No es un fallo: son tareas de arranque que se ejecutan una vez y terminan.
+`docker compose ps -a` muestra siempre **`migrate` como `Exited (0)`**. No es un
+fallo: es una tarea de arranque que se ejecuta una vez y termina.
 
 | Contenedor | Qué hace | Cuándo vuelve a correr |
 |------------|----------|------------------------|
 | `migrate` | Espera a PostgreSQL, aplica migraciones y siembra los datos demo (solo si la base está vacía) | En cada `docker compose up`; es idempotente |
-| `ollama-init` | Descarga los modelos gratuitos de Ollama | En cada `up`; si ya están, termina en segundos |
 
-Lo que importa es el **código de salida 0**. Si alguno sale con otro código, ahí sí
-hay un problema y conviene revisarlo:
+Lo que importa es el **código de salida 0**. Si sale con otro código, ahí sí hay
+un problema y conviene revisarlo:
 
 ```bash
 docker compose ps -a                  # ver estado y código de salida
 docker compose logs migrate           # detalle de las migraciones
-docker compose logs ollama-init       # descarga de modelos
 ```
 
-Los 12 servicios restantes sí deben quedar `Up` y, los que tienen sonda, `healthy`.
+El resto de los servicios debe quedar `Up` y, los que tienen sonda, `healthy`.
 
 **Usuarios de demostración** (creados por `seed_demo`):
 
@@ -111,6 +145,8 @@ make seed          # datos de demostración
 make test          # tests del backend
 make lint          # ruff + black + mypy + eslint
 make shell         # shell de Django
+make ai-check      # diagnóstico de Groq y de los embeddings locales
+make rebuild-indices  # reconstruir FAISS tras cambiar EMBEDDING_MODEL
 make prod-up       # levantar en producción
 ```
 
@@ -120,8 +156,9 @@ Sin `make` (Windows/PowerShell):
 docker compose up -d
 docker compose exec backend python manage.py migrate
 docker compose exec backend python manage.py seed_demo
-docker compose exec backend pytest src/tests/unit -q
-docker compose exec ollama ollama list      # modelos gratuitos descargados
+docker compose exec backend pytest src/tests -q
+docker compose exec backend python manage.py ai_bench          # estado de Groq
+docker compose exec celery-ai python manage.py rebuild_indices # reconstruir FAISS
 ```
 
 ### Primer recorrido sugerido
@@ -168,36 +205,50 @@ Detalle en [docs/09-estructura-carpetas.md](docs/09-estructura-carpetas.md).
 | 14 | [Roadmap del MVP](docs/14-roadmap-mvp.md) |
 | ✓ | [**Verificación ejecutada**](docs/VERIFICACION.md) — qué se probó realmente y qué defectos se corrigieron |
 
-## Cambiar de proveedor de IA
+## Configuración de la IA
 
 Todo el dominio depende de puertos (`LLMPort`, `EmbeddingsPort`, `TranscriberPort`,
-`VectorStorePort`). Cambiar de proveedor es cambiar una variable:
+`VectorStorePort`), pero **no hay selección de proveedor**: Groq es el único servicio
+externo. Cambiar de modelo es cambiar una variable, sin tocar código:
 
 ```dotenv
-# Gratis y local (por defecto)
-AI_PROVIDER=ollama
-OLLAMA_LLM_MODEL=qwen2.5:1.5b-instruct
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+# Groq · único proveedor externo. La clave SOLO por variable de entorno.
+GROQ_API_KEY=gsk_...
+GROQ_LLM_MODEL=llama-3.3-70b-versatile
+GROQ_WHISPER_MODEL=whisper-large-v3
 
-# De pago (opcional)
-AI_PROVIDER=openai
-OPENAI_API_KEY=sk-...
+# Embeddings locales (SentenceTransformers), sin llamadas externas
+EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+EMBEDDING_DEVICE=cpu
+
+# RAG
+RAG_TOP_K=8
+RAG_CHUNK_SIZE=800
+RAG_CHUNK_OVERLAP=120
 ```
 
-Al cambiar el modelo de embeddings hay que reconstruir el índice del proyecto:
-`POST /api/v1/projects/{id}/rebuild-index` (o el botón *Reconstruir índice* en la UI).
-El sistema detecta el cambio de dimensión y fuerza la reconstrucción completa.
+Cambiar el **LLM** o el modelo de **Whisper** no afecta a los índices. Cambiar el
+**modelo de embeddings** sí, porque cambia la dimensión del vector y FAISS no puede
+mezclar dimensiones distintas. El sistema lo detecta, lo registra en el log y responde
+"sin contexto" en vez de fallar; para arreglarlo:
 
-### Con GPU NVIDIA
-
-```dotenv
-OLLAMA_LLM_MODEL=qwen2.5:7b-instruct
-AI_ANALYSIS_MAX_CHARS=14000
-WHISPER_MODEL=medium
-WHISPER_DEVICE=cuda
-WHISPER_COMPUTE_TYPE=float16
+```bash
+make rebuild-indices
+# equivale a: docker compose exec celery-ai python manage.py rebuild_indices
 ```
-y añadir el reservado de GPU a los servicios `ollama` y `celery-ingest` del compose.
+
+El comando solo reconstruye los índices cuya dimensión ya no coincide. Con `--all`
+reconstruye todos y con `--async` los delega en Celery. También existe el endpoint
+`POST /api/v1/projects/{id}/rebuild-index` y el botón *Reconstruir índice* en la UI.
+
+### Seguridad de la credencial
+
+`GROQ_API_KEY` se lee **exclusivamente** de la variable de entorno, a través de
+`settings.AI_SETTINGS["GROQ"]["API_KEY"]`. No aparece en el código, ni en el
+Dockerfile, ni en los `docker-compose*.yml` (que la reciben del `.env`, no
+versionado), ni en los tests, ni en los logs de error. El `.env.example` la lleva
+vacía. Si falta, Django avisa al arrancar (`ai.W001`) y la primera llamada real
+falla con un mensaje que dice exactamente qué configurar.
 
 ## Producción
 

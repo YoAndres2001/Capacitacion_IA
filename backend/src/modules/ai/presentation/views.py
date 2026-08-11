@@ -312,12 +312,14 @@ class AIUsageView(APIView):
 
 
 class AIHealthView(APIView):
-    """Estado del proveedor de IA configurado."""
+    """Estado de Groq, el único proveedor externo de IA."""
 
     permission_classes = [IsAuthenticated]
 
     @extend_schema(tags=["IA"], summary="Salud del proveedor de IA")
     def get(self, request):
+        from django.conf import settings
+
         llm = get_llm()
         embeddings = get_embeddings()
         available = llm.is_available()
@@ -325,9 +327,13 @@ class AIHealthView(APIView):
             {
                 "provider": llm.provider_name,
                 "llm_model": llm.model_name,
+                "whisper_model": settings.AI_SETTINGS["GROQ"]["WHISPER_MODEL"],
+                "embedding_provider": embeddings.provider_name,
                 "embedding_model": embeddings.model_name,
                 "available": available,
-                "free": llm.provider_name == "ollama",
+                # Los embeddings no salen de la infraestructura: se calculan en
+                # el worker con SentenceTransformers.
+                "embeddings_local": embeddings.provider_name == "local",
             },
             status=status.HTTP_200_OK if available else status.HTTP_503_SERVICE_UNAVAILABLE,
         )

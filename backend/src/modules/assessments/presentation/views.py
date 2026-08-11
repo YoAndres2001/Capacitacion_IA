@@ -27,6 +27,7 @@ from src.shared.domain.exceptions import (
 )
 from src.shared.presentation.permissions import IsInstructor
 
+from ..infrastructure.exam_generator import assert_enough_content
 from ..infrastructure.models import Answer, Attempt, Exam, Question
 from ..infrastructure.tasks import generate_exam, grade_attempt
 from .serializers import (
@@ -198,6 +199,12 @@ class ExamViewSet(viewsets.ModelViewSet):
         options = dict(serializer.validated_data)
         options["created_by"] = str(request.user.id)
         options["title"] = options.get("title") or f"Evaluación · {training.title}"
+
+        # Se comprueba ANTES de encolar. El desenlace de la tarea viaja por
+        # WebSocket, y una que falla en milisegundos emite el aviso antes de que
+        # el navegador alcance a suscribirse: el usuario se queda con una barra
+        # de progreso viva para siempre. Lo que ya se sabe aquí se responde aquí.
+        assert_enough_content(training, int(options.get("num_questions", 10)))
 
         task = generate_exam.delay(str(training.id), options)
         return Response(

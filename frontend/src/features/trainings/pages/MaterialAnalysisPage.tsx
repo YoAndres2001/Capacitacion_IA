@@ -159,7 +159,7 @@ export default function MaterialAnalysisPage() {
 
           {tab === 'summary' && (
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h4" gutterBottom>
                   Resumen ejecutivo
                 </Typography>
@@ -218,7 +218,14 @@ export default function MaterialAnalysisPage() {
               {(concepts.data ?? []).map((concept) => (
                 <Card key={concept.id} variant="outlined">
                   <CardContent sx={{ py: 2 }}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Stack
+                      direction="row"
+                      justifyContent="space-between"
+                      alignItems="center"
+                      spacing={1}
+                      flexWrap="wrap"
+                      useFlexGap
+                    >
                       <Typography variant="subtitle1">{concept.name}</Typography>
                       <Chip
                         label={`relevancia ${(concept.relevance * 100).toFixed(0)}%`}
@@ -264,7 +271,7 @@ export default function MaterialAnalysisPage() {
 
           {tab === 'transcript' && (
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 {transcript.isLoading && <Loading label="Cargando transcripción…" />}
                 {transcript.isError && (
                   <Typography variant="body2" color="text.secondary">
@@ -273,7 +280,7 @@ export default function MaterialAnalysisPage() {
                 )}
                 {transcript.data && (
                   <>
-                    <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                    <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
                       <Chip label={`Idioma: ${transcript.data.language}`} size="small" />
                       <Chip label={transcript.data.model} size="small" variant="outlined" />
                       <Chip
@@ -283,7 +290,7 @@ export default function MaterialAnalysisPage() {
                       />
                     </Stack>
                     <Divider sx={{ mb: 2 }} />
-                    <Stack spacing={1} sx={{ maxHeight: 560, overflowY: 'auto' }}>
+                    <Stack spacing={1} sx={{ maxHeight: { xs: '55vh', md: 560 }, overflowY: 'auto' }}>
                       {transcript.data.segments.map((segment) => (
                         <Stack key={segment.index} direction="row" spacing={1.5}>
                           <Typography

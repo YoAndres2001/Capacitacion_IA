@@ -290,7 +290,25 @@ class FaissVectorStore(VectorStorePort):
         faiss, _ = _import_faiss()
 
         if self._index_path.exists():
-            self._index = faiss.read_index(str(self._index_path))
+            index = faiss.read_index(str(self._index_path))
+            if dimension and int(getattr(index, "d", dimension)) != dimension:
+                # Cambió el modelo de embeddings y con él la dimensión del
+                # vector. Mezclar dimensiones distintas aborta dentro de FAISS,
+                # así que el índice viejo se descarta en memoria y se parte de
+                # uno vacío: el chat responderá "sin contexto" hasta que se
+                # reconstruya, en vez de devolver un error 500.
+                logger.warning(
+                    f"El índice del proyecto {self.project_id} tiene "
+                    f"{int(index.d)} dimensiones y el modelo actual "
+                    f"({self._embeddings.model_name}) genera {dimension}. "
+                    "Reconstrúyalo con `python manage.py rebuild_indices` o "
+                    f"POST /api/v1/projects/{self.project_id}/rebuild-index"
+                )
+                self._index = _build_index(faiss, dimension, 0)
+                self._loaded = True
+                return
+
+            self._index = index
             if self._mapping_path.exists():
                 raw = json.loads(self._mapping_path.read_text(encoding="utf-8"))
                 self._mapping = {int(k): v for k, v in raw.items()}

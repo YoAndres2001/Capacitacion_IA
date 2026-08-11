@@ -159,10 +159,12 @@ function MaterialRow({
   const inProgress = ['PENDING', 'PROCESSING', 'ANALYZING'].includes(live.status);
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.75 }}>
-      <Stack direction="row" alignItems="center" spacing={1.5}>
+    <Paper variant="outlined" sx={{ p: { xs: 1.25, sm: 1.75 } }}>
+      {/* El nombre del archivo ocupa toda la fila en teléfono y el estado con
+          las acciones baja a la siguiente, en vez de comprimirse a la nada. */}
+      <Stack direction="row" alignItems="center" spacing={1.5} flexWrap="wrap" useFlexGap>
         <InsertDriveFile color="action" />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ flex: 1, minWidth: { xs: '60%', sm: 0 } }}>
           <Typography variant="body2" fontWeight={600} noWrap>
             {material.original_filename}
           </Typography>

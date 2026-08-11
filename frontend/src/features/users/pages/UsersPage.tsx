@@ -139,7 +139,7 @@ export default function UsersPage() {
         <Card>
           <CardContent sx={{ p: 0 }}>
             <Box sx={{ overflowX: 'auto' }}>
-              <Table size="small">
+              <Table size="small" sx={{ minWidth: 720 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Usuario</TableCell>
@@ -222,7 +222,7 @@ export default function UsersPage() {
                 helperText={form.formState.errors.email?.message}
                 {...form.register('email')}
               />
-              <Stack direction="row" spacing={2}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField
                   label="Nombre"
                   error={Boolean(form.formState.errors.first_name)}
@@ -231,7 +231,7 @@ export default function UsersPage() {
                 />
                 <TextField label="Apellido" {...form.register('last_name')} />
               </Stack>
-              <Stack direction="row" spacing={2}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField select label="Rol" defaultValue="STUDENT" {...form.register('role')}>
                   <MenuItem value="STUDENT">Estudiante</MenuItem>
                   <MenuItem value="INSTRUCTOR">Instructor</MenuItem>

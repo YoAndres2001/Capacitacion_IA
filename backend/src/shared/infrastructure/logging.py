@@ -54,4 +54,4 @@ def _safe(value: object) -> object:
 
 
 def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(f"capacita.{name}")
+    return logging.getLogger(f"nexora.{name}")

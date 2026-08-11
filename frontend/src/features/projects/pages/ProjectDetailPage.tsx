@@ -155,7 +155,7 @@ export default function ProjectDetailPage() {
       <Grid container spacing={3}>
         <Grid size={{ xs: 12, md: 5 }}>
           <Card>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h4" gutterBottom>
                 Colección vectorial
               </Typography>
@@ -182,7 +182,7 @@ export default function ProjectDetailPage() {
 
         <Grid size={{ xs: 12, md: 7 }}>
           <Card>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h4" gutterBottom>
                 Capacitaciones del proyecto
               </Typography>
@@ -195,9 +195,10 @@ export default function ProjectDetailPage() {
                   {trainings.data!.results.map((training) => (
                     <Stack
                       key={training.id}
-                      direction="row"
-                      alignItems="center"
+                      direction={{ xs: 'column', sm: 'row' }}
+                      alignItems={{ xs: 'flex-start', sm: 'center' }}
                       justifyContent="space-between"
+                      spacing={1}
                       sx={{ py: 1.5 }}
                     >
                       <Box sx={{ minWidth: 0 }}>

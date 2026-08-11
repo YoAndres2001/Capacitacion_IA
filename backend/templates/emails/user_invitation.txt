@@ -1,4 +1,4 @@
-Bienvenido a Capacita IA
+Bienvenido a Nexora
 
 Hola {{ user_name }},
 

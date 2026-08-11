@@ -35,11 +35,11 @@ export function PageHeader({
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
       justifyContent="space-between"
-      alignItems={{ xs: 'flex-start', sm: 'center' }}
+      alignItems={{ xs: 'stretch', sm: 'center' }}
       spacing={2}
       sx={{ mb: 3 }}
     >
-      <Box>
+      <Box sx={{ minWidth: 0 }}>
         <Typography variant="h1">{title}</Typography>
         {subtitle && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -47,7 +47,19 @@ export function PageHeader({
           </Typography>
         )}
       </Box>
-      {actions && <Stack direction="row" spacing={1}>{actions}</Stack>}
+      {actions && (
+        // Varias páginas pasan tres o cuatro acciones: en un teléfono no caben
+        // en una fila, así que se reparten en varias sin desbordar la pantalla.
+        <Stack
+          direction="row"
+          spacing={1}
+          flexWrap="wrap"
+          useFlexGap
+          sx={{ flexShrink: 0, alignItems: 'center' }}
+        >
+          {actions}
+        </Stack>
+      )}
     </Stack>
   );
 }
@@ -76,8 +88,15 @@ export function EmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <Paper variant="outlined" sx={{ p: 6, textAlign: 'center', borderStyle: 'dashed' }}>
-      {icon && <Box sx={{ mb: 2, color: 'text.disabled', '& svg': { fontSize: 56 } }}>{icon}</Box>}
+    <Paper
+      variant="outlined"
+      sx={{ p: { xs: 3, sm: 4, md: 6 }, textAlign: 'center', borderStyle: 'dashed' }}
+    >
+      {icon && (
+        <Box sx={{ mb: 2, color: 'text.disabled', '& svg': { fontSize: { xs: 44, sm: 56 } } }}>
+          {icon}
+        </Box>
+      )}
       <Typography variant="h4" gutterBottom>
         {title}
       </Typography>
@@ -213,10 +232,16 @@ export function StatCard({
   color?: string;
 }) {
   return (
-    <Paper sx={{ p: 2.5, height: '100%' }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+    <Paper sx={{ p: { xs: 1.75, sm: 2.5 }, height: '100%' }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2" color="text.secondary" noWrap>
+          {/* En dos columnas de teléfono la etiqueta no cabe en una línea:
+              se deja envolver en vez de recortarla con puntos suspensivos. */}
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ lineHeight: 1.3, wordBreak: 'break-word' }}
+          >
             {label}
           </Typography>
           <Typography variant="h2" sx={{ mt: 0.5, mb: hint ? 0.5 : 0 }}>
@@ -228,7 +253,21 @@ export function StatCard({
             </Typography>
           )}
         </Box>
-        {icon && <Box sx={{ color, '& svg': { fontSize: 34 }, opacity: 0.85 }}>{icon}</Box>}
+        {icon && (
+          <Box
+            sx={{
+              color,
+              opacity: 0.85,
+              flexShrink: 0,
+              // El icono decorativo estorba cuando el ancho es el recurso
+              // escaso: desaparece en teléfonos.
+              display: { xs: 'none', sm: 'block' },
+              '& svg': { fontSize: 34 },
+            }}
+          >
+            {icon}
+          </Box>
+        )}
       </Stack>
     </Paper>
   );

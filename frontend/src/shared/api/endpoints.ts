@@ -64,6 +64,7 @@ export const endpoints = {
     reprocess: (id: string) => `/materials/${id}/reprocess/`,
     stream: (id: string) => `/materials/${id}/stream/`,
     transcript: (id: string) => `/materials/${id}/transcript/`,
+    content: (id: string) => `/materials/${id}/content/`,
     chapters: (id: string) => `/materials/${id}/chapters/`,
     concepts: (id: string) => `/materials/${id}/concepts/`,
     faqs: (id: string) => `/materials/${id}/faqs/`,
@@ -75,6 +76,7 @@ export const endpoints = {
     trainingDetail: (id: string) => `/me/trainings/${id}`,
     attempts: '/me/attempts',
     stats: '/analytics/me',
+    activity: '/analytics/me/activity',
   },
   chat: {
     session: (id: string) => `/chat-sessions/${id}/`,

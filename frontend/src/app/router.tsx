@@ -25,7 +25,10 @@ const ExamResultsPage = lazy(() => import('@/features/exams/pages/ExamResultsPag
 const AnalyticsPage = lazy(() => import('@/features/analytics/pages/AnalyticsPage'));
 
 // Estudiante
-const StudentDashboard = lazy(() => import('@/features/dashboard/pages/StudentDashboard'));
+const StudentHomePage = lazy(() => import('@/features/dashboard/pages/StudentHomePage'));
+const AcademyPage = lazy(() => import('@/features/academy/pages/AcademyPage'));
+const RoutesPage = lazy(() => import('@/features/progress/pages/RoutesPage'));
+const ProgressPage = lazy(() => import('@/features/progress/pages/ProgressPage'));
 const CoursePlayerPage = lazy(() => import('@/features/player/pages/CoursePlayerPage'));
 const TakeExamPage = lazy(() => import('@/features/exams/pages/TakeExamPage'));
 const AttemptResultPage = lazy(() => import('@/features/exams/pages/AttemptResultPage'));
@@ -44,8 +47,8 @@ function RequireAuth({ children, roles }: { children: React.ReactNode; roles?: R
 
 function RedirectHome() {
   const { user } = useAuth();
-  // El administrador y el instructor entran a la consola; el estudiante, a sus cursos.
-  return <Navigate to={user?.permissions.manage_content ? '/admin' : '/mis-cursos'} replace />;
+  // El administrador y el instructor entran a la consola; el estudiante, a su inicio.
+  return <Navigate to={user?.permissions.manage_content ? '/admin' : '/inicio'} replace />;
 }
 
 const MANAGERS: Role[] = ['SUPERADMIN', 'ADMIN', 'INSTRUCTOR'];
@@ -154,7 +157,12 @@ export function AppRouter() {
           />
 
           {/* Estudiante */}
-          <Route path="/mis-cursos" element={<StudentDashboard />} />
+          <Route path="/inicio" element={<StudentHomePage />} />
+          <Route path="/academia" element={<AcademyPage />} />
+          <Route path="/rutas" element={<RoutesPage />} />
+          <Route path="/progreso" element={<ProgressPage />} />
+          {/* Ruta anterior del panel del estudiante, conservada para enlaces guardados. */}
+          <Route path="/mis-cursos" element={<Navigate to="/inicio" replace />} />
           <Route path="/cursos/:trainingId" element={<CoursePlayerPage />} />
           <Route path="/examenes/:examId/rendir" element={<TakeExamPage />} />
           <Route path="/intentos/:attemptId" element={<AttemptResultPage />} />

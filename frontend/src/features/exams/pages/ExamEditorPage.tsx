@@ -146,7 +146,7 @@ function QuestionCard({
 }) {
   return (
     <Card variant="outlined">
-      <CardContent sx={{ p: 2.5 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
         <Stack direction="row" spacing={1.5} alignItems="flex-start">
           <Chip label={index + 1} size="small" />
           <Box sx={{ flex: 1, minWidth: 0 }}>

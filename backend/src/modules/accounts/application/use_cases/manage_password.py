@@ -62,7 +62,7 @@ class RequestPasswordResetUseCase(UseCase[RequestResetInput, None]):
 
         self._notifier.send_email(
             to=[user.email],
-            subject="Recuperación de contraseña · Capacita IA",
+            subject="Recuperación de contraseña · Nexora",
             template="password_reset",
             context={
                 "user_name": user.get_short_name(),

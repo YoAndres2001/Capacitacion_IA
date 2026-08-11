@@ -1,22 +1,23 @@
-# ── Orquestación de IA ───────────────────────────────────────
-langchain==0.3.13
-langchain-core==0.3.28
-langchain-community==0.3.13
-langchain-text-splitters==0.3.4
+# ─────────────────────────────────────────────────────────────
+#  IA · Groq es el ÚNICO proveedor externo
+#
+#  El LLM y la transcripción (Whisper) se consumen por HTTP con `requests`
+#  (ya presente en base.txt): no hace falta ningún SDK de proveedor.
+# ─────────────────────────────────────────────────────────────
+
+# ── Orquestación del agente tutor ────────────────────────────
 langgraph==0.2.60
 
-# Proveedores (Ollama es el gratuito por defecto)
-langchain-ollama==0.2.2
-ollama==0.4.4
-langchain-openai==0.2.14          # opcional, solo si AI_PROVIDER=openai
-openai==1.58.1                    # opcional
+# ── Embeddings LOCALES ───────────────────────────────────────
+# Se ejecutan dentro del worker: ninguna llamada externa.
+sentence-transformers==3.3.1
 
 # ── Base vectorial ───────────────────────────────────────────
 faiss-cpu==1.9.0.post1
 numpy==1.26.4
 
-# ── Transcripción (gratis, local) ────────────────────────────
-faster-whisper==1.1.0
+# ── Procesamiento de audio/video ─────────────────────────────
+# Extrae y trocea el audio antes de enviarlo a Groq Whisper.
 ffmpeg-python==0.2.0
 
 # ── Extracción de documentos ─────────────────────────────────

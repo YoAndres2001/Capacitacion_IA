@@ -55,7 +55,7 @@ def get_notifier() -> NotifierPort:
 
 
 # ─────────────────────────────────────────────────────────────
-#  IA · proveedor desacoplado (RF-047)
+#  IA · Groq como único proveedor externo (RF-047)
 # ─────────────────────────────────────────────────────────────
 @lru_cache(maxsize=1)
 def get_llm() -> "LLMPort":
@@ -66,6 +66,7 @@ def get_llm() -> "LLMPort":
 
 @lru_cache(maxsize=1)
 def get_embeddings() -> "EmbeddingsPort":
+    """Embeddings LOCALES (SentenceTransformers): no salen de la infraestructura."""
     from src.modules.ai.infrastructure.providers.factory import AIProviderFactory
 
     return AIProviderFactory.create_embeddings()
@@ -73,11 +74,9 @@ def get_embeddings() -> "EmbeddingsPort":
 
 @lru_cache(maxsize=1)
 def get_transcriber() -> "TranscriberPort":
-    from src.modules.ai.infrastructure.transcription.faster_whisper import (
-        FasterWhisperTranscriber,
-    )
+    from src.modules.ai.infrastructure.transcription.groq_whisper import GroqTranscriber
 
-    return FasterWhisperTranscriber()
+    return GroqTranscriber()
 
 
 def get_document_extractor(material_type: str) -> "DocumentExtractorPort":

@@ -13,7 +13,7 @@ Iteraciones de 1 semana. Cada una termina con software ejecutable con `docker co
 - Django 5 con settings por entorno, `shared/` (Clean Architecture base), health checks.
 - Frontend Vite + TS + MUI con tema y layout base.
 - Celery + Redis operativos; contenedor `websocket` con Daphne respondiendo un ping.
-- Ollama con modelos descargados.
+- `GROQ_API_KEY` configurada y validada al arrancar.
 
 **Criterio de aceptación:** `docker compose up` levanta todo sano; `/health/ready` responde 200;
 `/api/docs/` muestra Swagger; el frontend carga y `wss://…/ws/ping/` responde.
@@ -57,8 +57,8 @@ Iteraciones de 1 semana. Cada una termina con software ejecutable con `docker co
 
 ## Iteración 4 · Pipeline de ingesta con IA (M5 · parte 1)
 - Puertos `TranscriberPort`, `DocumentExtractorPort`, `EmbeddingsPort`, `LLMPort`, `VectorStorePort`.
-- Adaptadores: ffmpeg, `faster-whisper`, PyMuPDF/docx/pptx/txt, Ollama (LLM y embeddings), FAISS.
-- `AIProviderFactory` conmutable Ollama ↔ OpenAI por variable de entorno.
+- Adaptadores: ffmpeg, Groq Whisper, PyMuPDF/docx/pptx/txt, Groq (LLM), SentenceTransformers (embeddings locales), FAISS.
+- `AIProviderFactory` ata los puertos a Groq (LLM) y a los embeddings locales; el modelo se elige por variable de entorno.
 - Tarea `ingest_material` completa: transcripción → normalización → chunking → embeddings → índice.
 - Cadenas LLM: capítulos, resumen, conceptos, FAQ, preguntas candidatas.
 - Frontend: vista de análisis del material (transcripción, capítulos, resumen, conceptos).
@@ -139,7 +139,7 @@ Iteraciones de 1 semana. Cada una termina con software ejecutable con `docker co
 ```mermaid
 gantt
     dateFormat  YYYY-MM-DD
-    title Roadmap MVP · Capacita IA
+    title Roadmap MVP · Nexora
     section Base
     It.0 Fundaciones            :i0, 2026-08-03, 7d
     It.1 Identidad              :i1, after i0, 7d
@@ -160,12 +160,12 @@ gantt
 
 | Riesgo | Prob. | Impacto | Mitigación |
 |--------|-------|---------|------------|
-| Whisper demasiado lento en CPU | Alta | Alto | Modelo `small` + VAD; documentar perfil GPU; cola `ingest` dedicada |
-| Calidad insuficiente de modelos locales para JSON estructurado | Media | Alto | Salidas Pydantic con reintento correctivo; opción de conmutar a OpenAI con una variable |
+| Video demasiado grande para una sola petición a Groq | Alta | Medio | Extracción a FLAC 16 kHz + troceo con ffmpeg y recálculo de timestamps globales |
+| JSON estructurado mal formado | Media | Alto | Structured Outputs cuando el modelo lo admite; si no, modo JSON + validación Pydantic con reintento correctivo y rescate de salidas truncadas |
 | FAISS en volumen compartido con múltiples nodos | Media | Medio | Escrituras solo desde workers con lock; `VectorStorePort` permite migrar a Qdrant |
 | Cargas de 4 GB inestables | Media | Medio | Carga por trozos reanudable + `proxy_request_buffering off` |
 | Alucinación en respuestas | Media | Alto | Umbral de recuperación, validación de citas, golden set de regresión |
-| Costos de IA si se activa OpenAI | Baja | Medio | Ollama por defecto (gratis); presupuesto y panel de consumo |
+| Costos y límites de uso de Groq | Media | Medio | RAG en vez de enviar el material completo; embeddings locales sin costo; backoff que respeta `Retry-After`; panel de consumo |
 
 ## Post-MVP
 

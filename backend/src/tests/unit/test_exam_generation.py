@@ -10,6 +10,8 @@ examen usable".
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.modules.ai.domain.rag_policies import AnswerGroundingVerifier
@@ -276,3 +278,50 @@ def test_source_index_fuera_de_rango_no_rompe():
     assert ExamGenerator._source_for(9, chunks) is None
     assert ExamGenerator._source_for(0, chunks) is None
     assert ExamGenerator._source_for(None, chunks) is None
+
+
+# ── Cuánto material hace falta ───────────────────────────────
+def test_el_material_disponible_se_traduce_a_un_maximo_de_preguntas():
+    """
+    Antes se contaban FRAGMENTOS, y eso medía `CHUNK_SIZE_TOKENS`, no contenido.
+
+    Caso real: un video de 90 s y un PDF corto entran en un fragmento cada uno,
+    sumaban 2 de los 5 exigidos y la capacitación quedaba bloqueada con 3.423
+    caracteres de material perfectamente utilizable.
+    """
+    from src.modules.assessments.infrastructure.exam_generator import max_questions_for
+
+    assert max_questions_for(3423) == 11        # el caso que estaba bloqueado
+    assert max_questions_for(11000) == 36       # la capacitación de demostración
+
+
+def test_por_debajo_del_piso_no_hay_examen_posible():
+    from src.modules.assessments.infrastructure.exam_generator import (
+        MIN_CONTENT_CHARS,
+        max_questions_for,
+    )
+
+    assert max_questions_for(MIN_CONTENT_CHARS - 1) == 0
+    assert max_questions_for(0) == 0
+
+
+def test_pedir_mas_preguntas_de_las_que_sostiene_el_material_falla_con_el_numero_util():
+    """El error debe decir cuántas caben, no solo que no se puede."""
+    from src.modules.assessments.infrastructure.exam_generator import assert_enough_content
+    from src.shared.domain.exceptions import InsufficientContent
+
+    chunks = [SimpleNamespace(content="x" * 3423)]
+
+    with pytest.raises(InsufficientContent) as error:
+        assert_enough_content(None, 30, chunks=chunks)
+
+    assert error.value.details["max_questions"] == 11
+    assert "11" in error.value.message
+
+
+def test_con_material_suficiente_no_levanta_nada():
+    from src.modules.assessments.infrastructure.exam_generator import assert_enough_content
+
+    chunks = [SimpleNamespace(content="x" * 3423)]
+
+    assert assert_enough_content(None, 10, chunks=chunks) is None

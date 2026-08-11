@@ -10,10 +10,12 @@ import {
   CheckCircle,
   Description,
   ExpandMore,
+  MenuBook,
   PlayCircle,
   Quiz,
   Search,
   SmartToy,
+  Visibility,
 } from '@mui/icons-material';
 import {
   Accordion,
@@ -58,6 +60,7 @@ import type {
 } from '@/shared/api/types';
 import { ErrorState, Loading, ProgressBar } from '@/shared/components';
 import { ChatPanel } from '@/features/chat/ChatPanel';
+import { MaterialViewer } from '@/features/player/components/MaterialViewer';
 import { formatDuration, progressValue } from '@/shared/utils/format';
 
 const SAVE_INTERVAL_MS = 10_000;
@@ -66,12 +69,21 @@ export default function CoursePlayerPage() {
   const { trainingId = '' } = useParams();
   const navigate = useNavigate();
   const theme = useTheme();
-  const isDesktop = useMediaQuery(theme.breakpoints.up('lg'));
+  /**
+   * Tres columnas (video + índice + chat) piden mucho ancho: con el cajón fijo
+   * de 248 px, el índice de 380 px y el chat de 400 px, por debajo de un
+   * monitor grande al video le quedarían menos de 400 px. Por eso cada columna
+   * lateral aparece en su propio umbral y, si no cabe, se ofrece en un cajón.
+   */
+  const chatInline = useMediaQuery(theme.breakpoints.up('xl'));
+  const sideInline = useMediaQuery(theme.breakpoints.up('lg'));
   const queryClient = useQueryClient();
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // Sirve para `<video>` y `<audio>`: ambos exponen la API de HTMLMediaElement.
+  const videoRef = useRef<HTMLMediaElement | null>(null);
   const [lessonId, setLessonId] = useState<string>('');
   const [chatOpen, setChatOpen] = useState(false);
+  const [sideOpen, setSideOpen] = useState(false);
   const [sideTab, setSideTab] = useState('content');
   const [searchTerm, setSearchTerm] = useState('');
   const [currentTime, setCurrentTime] = useState(0);
@@ -109,7 +121,7 @@ export default function CoursePlayerPage() {
       (await api.get<{ url: string; mime_type: string; duration_seconds: number }>(
         endpoints.materials.stream(material!.id),
       )).data,
-    enabled: Boolean(material && material.type !== 'PDF' && material.type !== 'DOCX'),
+    enabled: Boolean(material),
   });
 
   const transcript = useQuery({
@@ -137,6 +149,10 @@ export default function CoursePlayerPage() {
     enabled: searchTerm.trim().length >= 2 && sideTab === 'search',
   });
 
+  // En la vista previa no hay matrícula: escribir progreso devolvería 403 y, si
+  // la hubiera, ensuciaría las estadísticas del curso con la visita del autor.
+  const isPreview = course.data?.preview ?? false;
+
   const saveProgress = useMutation({
     mutationFn: ({ id, position }: { id: string; position: number }) =>
       api.patch(endpoints.lessons.progress(id), {
@@ -152,22 +168,35 @@ export default function CoursePlayerPage() {
   });
 
   // Guardado periódico y al desmontar (RF-032).
+  //
+  // Solo se reporta lo REPRODUCIDO (`currentTime`). Una lección de documento no
+  // tiene reproducción que medir y no se le atribuye tiempo: su avance se marca
+  // como completada, de forma explícita. Medir el rato con la pestaña abierta se
+  // descartó a propósito — no distingue leer de dejar la ventana olvidada.
   useEffect(() => {
-    if (!lessonId) return;
+    if (!lessonId || isPreview) return;
 
-    const timer = window.setInterval(() => {
-      const position = videoRef.current?.currentTime ?? 0;
-      if (position > 0) saveProgress.mutate({ id: lessonId, position });
-    }, SAVE_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(timer);
+    const flush = () => {
       const position = videoRef.current?.currentTime ?? 0;
       if (position > 0) saveProgress.mutate({ id: lessonId, position });
     };
+
+    const timer = window.setInterval(flush, SAVE_INTERVAL_MS);
+    // Cerrar la pestaña no dispara el desmontaje: sin esto se perdería el
+    // último tramo de reproducción.
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onHide);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onHide);
+      flush();
+    };
     // saveProgress es estable dentro del ciclo de vida de la página.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lessonId]);
+  }, [lessonId, isPreview]);
 
   // Reanudar donde quedó.
   const handleLoadedMetadata = useCallback(() => {
@@ -210,16 +239,43 @@ export default function CoursePlayerPage() {
   if (course.isError) return <ErrorState error={course.error} onRetry={course.refetch} />;
 
   const data = course.data!;
-  const progress = progressValue(data.enrollment.progress);
-  const publishedExams = (exams.data ?? []).filter((exam) => exam.status === 'PUBLISHED');
+  const progress = progressValue(data.enrollment?.progress ?? 0);
+  // El estudiante solo ve exámenes publicados; en la vista previa se muestran
+  // también los borradores, que es justo lo que el instructor quiere revisar.
+  const publishedExams = (exams.data ?? []).filter(
+    (exam) => exam.status === 'PUBLISHED' || isPreview,
+  );
   const activeSegmentIndex = transcript.data?.segments.findIndex(
     (segment) => currentTime >= segment.start_time && currentTime <= segment.end_time,
   );
 
   return (
     <Box>
+      {isPreview && (
+        <Alert
+          severity="info"
+          icon={<Visibility />}
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => navigate(`/capacitaciones/${trainingId}/editor`)}
+            >
+              Volver al editor
+            </Button>
+          }
+        >
+          Estás viendo el curso <strong>como lo verá un estudiante</strong>. No se registra
+          progreso y los exámenes en borrador también aparecen.
+        </Alert>
+      )}
+
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-        <IconButton onClick={() => navigate('/mis-cursos')} aria-label="Volver">
+        <IconButton
+          onClick={() => navigate(isPreview ? `/capacitaciones/${trainingId}/editor` : '/inicio')}
+          aria-label="Volver"
+        >
           <ArrowBack />
         </IconButton>
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -230,61 +286,63 @@ export default function CoursePlayerPage() {
             {data.project_name}
           </Typography>
         </Box>
-        {data.chat_enabled && !isDesktop && (
-          <Button startIcon={<SmartToy />} variant="outlined" onClick={() => setChatOpen(true)}>
-            Tutor IA
+        {/* Cuando el índice no cabe al costado, se abre desde aquí: sin esto
+            un estudiante en teléfono no tendría cómo cambiar de lección. */}
+        {!sideInline && (
+          <Tooltip title="Contenido del curso">
+            <IconButton onClick={() => setSideOpen(true)} aria-label="Contenido del curso">
+              <MenuBook />
+            </IconButton>
+          </Tooltip>
+        )}
+        {data.chat_enabled && !chatInline && (
+          <Button
+            startIcon={<SmartToy />}
+            variant="outlined"
+            onClick={() => setChatOpen(true)}
+            sx={{ flexShrink: 0 }}
+          >
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+              Tutor&nbsp;
+            </Box>
+            IA
           </Button>
         )}
       </Stack>
 
-      <Box sx={{ mb: 2, maxWidth: 420 }}>
-        <ProgressBar
-          value={progress}
-          label="Avance del curso"
-          color={progress >= 100 ? 'success' : 'primary'}
-        />
-      </Box>
+      {!isPreview && (
+        <Box sx={{ mb: 2, maxWidth: 420 }}>
+          <ProgressBar
+            value={progress}
+            label="Avance del curso"
+            color={progress >= 100 ? 'success' : 'primary'}
+          />
+        </Box>
+      )}
 
-      <Stack direction="row" spacing={2.5} alignItems="flex-start">
+      <Stack direction="row" spacing={{ xs: 0, lg: 2.5 }} alignItems="flex-start">
         {/* Columna principal */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Card>
-            <Box sx={{ bgcolor: 'black', position: 'relative' }}>
-              {material && stream.data ? (
-                <video
-                  ref={videoRef}
-                  key={material.id}
-                  src={stream.data.url}
-                  controls
-                  controlsList="nodownload"
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onTimeUpdate={handleTimeUpdate}
-                  onEnded={() => completeLesson.mutate(lessonId)}
-                  style={{ width: '100%', maxHeight: '58vh', display: 'block' }}
-                />
-              ) : (
-                <Box sx={{ py: 8, textAlign: 'center', color: 'grey.500' }}>
-                  {material ? (
-                    <>
-                      <Description sx={{ fontSize: 44, mb: 1 }} />
-                      <Typography variant="body2">
-                        Material de tipo documento: consulta su contenido con el Tutor IA o
-                        descárgalo desde la lección.
-                      </Typography>
-                    </>
-                  ) : (
-                    <>
-                      <PlayCircle sx={{ fontSize: 44, mb: 1 }} />
-                      <Typography variant="body2">
-                        Esta lección aún no tiene material disponible.
-                      </Typography>
-                    </>
-                  )}
-                </Box>
-              )}
+            <Box
+              sx={{
+                bgcolor: material?.type === 'VIDEO' ? 'black' : 'background.paper',
+                position: 'relative',
+              }}
+            >
+              <MaterialViewer
+                material={material}
+                streamUrl={stream.data?.url}
+                onMediaRef={(element) => {
+                  videoRef.current = element;
+                }}
+                onLoadedMetadata={handleLoadedMetadata}
+                onTimeUpdate={handleTimeUpdate}
+                onEnded={() => !isPreview && completeLesson.mutate(lessonId)}
+              />
             </Box>
 
-            <CardContent sx={{ p: 2.5 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
               <Stack
                 direction={{ xs: 'column', sm: 'row' }}
                 justifyContent="space-between"
@@ -299,14 +357,22 @@ export default function CoursePlayerPage() {
                     </Typography>
                   )}
                 </Box>
-                <Button
-                  variant={data.lesson_progress[lessonId]?.completed ? 'outlined' : 'contained'}
-                  startIcon={<CheckCircle />}
-                  onClick={() => completeLesson.mutate(lessonId)}
-                  disabled={!lessonId || data.lesson_progress[lessonId]?.completed}
-                >
-                  {data.lesson_progress[lessonId]?.completed ? 'Completada' : 'Marcar completada'}
-                </Button>
+                <Tooltip title={isPreview ? 'En la vista previa no se registra progreso' : ''}>
+                  <span>
+                    <Button
+                      variant={data.lesson_progress[lessonId]?.completed ? 'outlined' : 'contained'}
+                      startIcon={<CheckCircle />}
+                      onClick={() => completeLesson.mutate(lessonId)}
+                      disabled={
+                        !lessonId || isPreview || data.lesson_progress[lessonId]?.completed
+                      }
+                    >
+                      {data.lesson_progress[lessonId]?.completed
+                        ? 'Completada'
+                        : 'Marcar completada'}
+                    </Button>
+                  </span>
+                </Tooltip>
               </Stack>
 
               {material?.summary && (
@@ -322,7 +388,7 @@ export default function CoursePlayerPage() {
 
           {publishedExams.length > 0 && (
             <Card sx={{ mt: 2.5 }}>
-              <CardContent sx={{ p: 2.5 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                 <Typography variant="h4" gutterBottom>
                   Evaluaciones
                 </Typography>
@@ -332,8 +398,8 @@ export default function CoursePlayerPage() {
                     return (
                       <Stack
                         key={exam.id}
-                        direction="row"
-                        alignItems="center"
+                        direction={{ xs: 'column', sm: 'row' }}
+                        alignItems={{ xs: 'flex-start', sm: 'center' }}
                         justifyContent="space-between"
                         spacing={1.5}
                       >
@@ -372,20 +438,25 @@ export default function CoursePlayerPage() {
           )}
         </Box>
 
-        {/* Columna lateral: contenido, transcripción, búsqueda */}
-        <Card sx={{ width: 380, flexShrink: 0, display: { xs: 'none', md: 'block' } }}>
+        {/* Columna lateral: contenido, transcripción, búsqueda.
+            Va al costado en monitores y en un cajón lateral cuando no cabe. */}
+        <SidePanelShell
+          inline={sideInline}
+          open={sideOpen}
+          onClose={() => setSideOpen(false)}
+        >
           <Tabs
             value={sideTab}
             onChange={(_, value) => setSideTab(value)}
             variant="fullWidth"
-            sx={{ borderBottom: 1, borderColor: 'divider' }}
+            sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}
           >
             <Tab label="Contenido" value="content" />
             <Tab label="Transcripción" value="transcript" />
             <Tab label={<Search fontSize="small" />} value="search" />
           </Tabs>
 
-          <Box sx={{ maxHeight: '68vh', overflowY: 'auto' }}>
+          <Box sx={{ flex: 1, maxHeight: { xs: 'none', lg: '68vh' }, overflowY: 'auto' }}>
             {sideTab === 'content' && (
               <Box sx={{ p: 1 }}>
                 {data.modules.map((module, index) => (
@@ -529,17 +600,17 @@ export default function CoursePlayerPage() {
               </Box>
             )}
           </Box>
-        </Card>
+        </SidePanelShell>
 
-        {/* Chat IA fijo en pantallas grandes */}
-        {data.chat_enabled && isDesktop && (
+        {/* Chat IA fijo solo cuando sobra ancho para una tercera columna */}
+        {data.chat_enabled && chatInline && (
           <Card sx={{ width: 400, flexShrink: 0, height: '78vh', display: 'flex' }}>
             <ChatPanel trainingId={trainingId} onSeek={seekFromCitation} />
           </Card>
         )}
       </Stack>
 
-      {/* Chat IA en cajón para pantallas pequeñas */}
+      {/* Chat IA en cajón para el resto de las pantallas */}
       <Drawer
         anchor="right"
         open={chatOpen}
@@ -549,5 +620,52 @@ export default function CoursePlayerPage() {
         <ChatPanel trainingId={trainingId} onSeek={seekFromCitation} />
       </Drawer>
     </Box>
+  );
+}
+
+/**
+ * Contenedor del panel lateral del curso.
+ *
+ * Es el mismo contenido en los dos casos; lo único que cambia es si vive al
+ * costado del video o se superpone en un cajón, así que se resuelve aquí en
+ * vez de duplicar el índice, la transcripción y el buscador.
+ */
+function SidePanelShell({
+  inline,
+  open,
+  onClose,
+  children,
+}: {
+  inline: boolean;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (inline) {
+    return (
+      <Card
+        sx={{
+          width: { lg: 340, xl: 380 },
+          flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {children}
+      </Card>
+    );
+  }
+
+  return (
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      PaperProps={{
+        sx: { width: { xs: '100%', sm: 420 }, display: 'flex', flexDirection: 'column' },
+      }}
+    >
+      {children}
+    </Drawer>
   );
 }

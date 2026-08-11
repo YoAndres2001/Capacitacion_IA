@@ -8,8 +8,8 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$DEST"
 
 echo "==> Respaldando base de datos"
-docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-capacita}" \
-  -d "${POSTGRES_DB:-capacita}" --clean --if-exists \
+docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-nexora}" \
+  -d "${POSTGRES_DB:-nexora}" --clean --if-exists \
   | gzip > "$DEST/db_$STAMP.sql.gz"
 
 echo "==> Respaldando media (videos y documentos)"

@@ -1,11 +1,10 @@
 """
 Recuperación de la salida JSON que el modelo deja a medias.
 
-Con `format: json` un modelo pequeño emite JSON válido hasta que agota
-`num_predict` y se corta a mitad de una palabra. Medido en este proyecto: un
-lote de preguntas se cortaba en `eval_count == 1024` exacto y el examen entero
-se quedaba en cero preguntas. Estas pruebas fijan el rescate de la parte que sí
-llegó completa.
+En modo JSON el modelo emite JSON válido hasta que agota `max_tokens` y se corta
+a mitad de una palabra. Medido en este proyecto: un lote de preguntas se cortaba
+en el límite exacto de tokens y el examen entero se quedaba en cero preguntas.
+Estas pruebas fijan el rescate de la parte que sí llegó completa.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import json
 
 import pytest
 
-from src.modules.ai.infrastructure.providers.ollama import (
+from src.modules.ai.infrastructure.providers.parsing import (
     parse_json_loosely,
     repair_truncated_json,
 )
@@ -88,3 +87,53 @@ def test_el_json_entre_vallas_de_codigo_sigue_parseando():
 def test_una_salida_sin_json_alguno_sigue_fallando():
     with pytest.raises(ValueError):
         parse_json_loosely("Claro, aquí tienes las preguntas que me pediste.")
+
+
+# ── Esquema estricto para Structured Outputs ─────────────────
+def test_el_esquema_estricto_exige_todos_los_campos_y_cierra_el_objeto():
+    """
+    Structured Outputs rechaza el esquema de Pydantic tal cual.
+
+    Exige `additionalProperties: false` y **todos** los campos en `required`,
+    incluidos los que tienen valor por defecto. Sin esta traducción la API
+    responde 400 y cada generación de examen degradaría a modo JSON.
+    """
+    from pydantic import BaseModel, Field
+
+    from src.modules.ai.infrastructure.providers.parsing import strict_schema
+
+    class Opcion(BaseModel):
+        texto: str = Field(max_length=200)
+        correcta: bool = False
+
+    class Pregunta(BaseModel):
+        enunciado: str
+        opciones: list[Opcion] = Field(default_factory=list)
+
+    schema = strict_schema(Pregunta)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(schema["required"]) == ["enunciado", "opciones"]
+
+    # La referencia a `Opcion` queda embebida, no como `$ref`.
+    assert "$defs" not in schema
+    opcion = schema["properties"]["opciones"]["items"]
+    assert sorted(opcion["required"]) == ["correcta", "texto"]
+    assert opcion["additionalProperties"] is False
+
+
+def test_el_esquema_estricto_elimina_las_palabras_clave_no_admitidas():
+    """`default` y `maxLength` hacen que la API rechace el esquema entero."""
+    import json as _json
+
+    from pydantic import BaseModel, Field
+
+    from src.modules.ai.infrastructure.providers.parsing import strict_schema
+
+    class Modelo(BaseModel):
+        titulo: str = Field(default="sin título", max_length=50)
+
+    serializado = _json.dumps(strict_schema(Modelo))
+
+    assert "default" not in serializado
+    assert "maxLength" not in serializado

@@ -7,7 +7,7 @@ from celery.signals import setup_logging
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
 
-app = Celery("capacita")
+app = Celery("nexora")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Descubre `tasks.py` dentro de cada módulo (incluida la ruta infrastructure/).

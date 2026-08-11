@@ -153,13 +153,19 @@ export default function AnalyticsPage() {
 
       {tab === 'progress' && (
         <Box>
-          <Stack direction="row" justifyContent="space-between" sx={{ mb: 2 }} spacing={2}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            justifyContent="space-between"
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            sx={{ mb: 2 }}
+            spacing={2}
+          >
             <TextField
               select
               label="Proyecto"
               value={projectFilter}
               onChange={(event) => setProjectFilter(event.target.value)}
-              sx={{ maxWidth: 280 }}
+              sx={{ maxWidth: { sm: 280 } }}
             >
               <MenuItem value="">Todos</MenuItem>
               {(projects.data?.results ?? []).map((project) => (
@@ -179,7 +185,9 @@ export default function AnalyticsPage() {
             <Card>
               <CardContent sx={{ p: 0 }}>
                 <Box sx={{ overflowX: 'auto' }}>
-                  <Table size="small">
+                  {/* `minWidth` es lo que fuerza el desplazamiento: sin él las
+                      columnas se comprimen hasta volverse ilegibles. */}
+                  <Table size="small" sx={{ minWidth: 860 }}>
                     <TableHead>
                       <TableRow>
                         <TableCell>Usuario</TableCell>
@@ -269,7 +277,7 @@ export default function AnalyticsPage() {
               <Card>
                 <CardContent sx={{ p: 0 }}>
                   <Box sx={{ overflowX: 'auto' }}>
-                    <Table size="small">
+                    <Table size="small" sx={{ minWidth: 640 }}>
                       <TableHead>
                         <TableRow>
                           <TableCell>Examen</TableCell>
@@ -351,11 +359,14 @@ export default function AnalyticsPage() {
               <Grid container spacing={3}>
                 <Grid size={{ xs: 12, md: 7 }}>
                   <Card>
-                    <CardContent sx={{ p: 3 }}>
+                    <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                       <Typography variant="h4" gutterBottom>
                         Consumo por propósito
                       </Typography>
-                      <Table size="small" sx={{ mt: 1 }}>
+                      {/* Cinco columnas no entran en un teléfono: la tabla se
+                          desplaza dentro de la tarjeta, no arrastra la página. */}
+                      <Box sx={{ overflowX: 'auto', mx: { xs: -1, sm: 0 } }}>
+                      <Table size="small" sx={{ mt: 1, minWidth: 420 }}>
                         <TableHead>
                           <TableRow>
                             <TableCell>Propósito</TableCell>
@@ -390,13 +401,14 @@ export default function AnalyticsPage() {
                           )}
                         </TableBody>
                       </Table>
+                      </Box>
                     </CardContent>
                   </Card>
                 </Grid>
 
                 <Grid size={{ xs: 12, md: 5 }}>
                   <Card sx={{ height: '100%' }}>
-                    <CardContent sx={{ p: 3 }}>
+                    <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                       <Typography variant="h4" gutterBottom>
                         Preguntas más frecuentes
                       </Typography>

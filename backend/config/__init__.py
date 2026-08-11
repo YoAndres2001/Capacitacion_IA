@@ -1,4 +1,4 @@
-"""Configuración del proyecto Capacita IA."""
+"""Configuración del proyecto Nexora."""
 
 from .celery import app as celery_app
 

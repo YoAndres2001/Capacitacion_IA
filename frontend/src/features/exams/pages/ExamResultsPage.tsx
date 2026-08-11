@@ -98,7 +98,7 @@ export default function ExamResultsPage() {
       <Grid container spacing={3}>
         <Grid size={{ xs: 12, md: 5 }}>
           <Card sx={{ height: '100%' }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h4" gutterBottom>
                 Distribución de notas
               </Typography>
@@ -126,7 +126,7 @@ export default function ExamResultsPage() {
 
         <Grid size={{ xs: 12, md: 7 }}>
           <Card sx={{ height: '100%' }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h4" gutterBottom>
                 Preguntas más falladas
               </Typography>
@@ -140,7 +140,7 @@ export default function ExamResultsPage() {
                 </Typography>
               ) : (
                 <Box sx={{ overflowX: 'auto' }}>
-                  <Table size="small">
+                  <Table size="small" sx={{ minWidth: 480 }}>
                     <TableHead>
                       <TableRow>
                         <TableCell>Pregunta</TableCell>

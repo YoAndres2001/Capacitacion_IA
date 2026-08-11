@@ -9,30 +9,26 @@ artefactos (ejercicios, evaluaciones, explicaciones paso a paso).
 **Restricción fundacional:** todas sus herramientas leen únicamente del conocimiento del proyecto/
 capacitación. El agente **no tiene acceso a Internet** ni a conocimiento externo.
 
-## 2. Proveedor de modelo (gratuito por defecto)
+## 2. Modelos (Groq como único proveedor externo)
 
-| Uso | Modelo por defecto (Ollama, gratis) | Alternativa de pago |
-|-----|-------------------------------------|---------------------|
-| Chat / tutor / razonamiento | `qwen2.5:1.5b-instruct` | `gpt-4o-mini` |
-| Generación estructurada (exámenes) | `qwen2.5:1.5b-instruct` (modo JSON) | `gpt-4o-mini` |
-| Embeddings | `nomic-embed-text` (768 dim) | `text-embedding-3-small` |
-| Transcripción | `faster-whisper small` (local) | API de Whisper |
+| Uso | Dónde corre | Modelo (variable) |
+|-----|-------------|-------------------|
+| Chat / tutor / razonamiento | Groq | `GROQ_LLM_MODEL` (`llama-3.3-70b-versatile`) |
+| Generación estructurada (exámenes) | Groq | `GROQ_LLM_MODEL` (Structured Outputs, con degradación a modo JSON) |
+| Transcripción | Groq | `GROQ_WHISPER_MODEL` (`whisper-large-v3`) |
+| Embeddings | **Local**, en el worker | `EMBEDDING_MODEL` (SentenceTransformers, 384 dim) |
 
-**Por qué un modelo de 1.5B por defecto:** el objetivo es que la plataforma funcione en el
-equipo de cualquier desarrollador, sin GPU. Un modelo de 7B en CPU tarda decenas de minutos
-por cadena de análisis y satura la máquina. Con `AI_ANALYSIS_MAX_CHARS` acotado, un 1.5B
-produce JSON válido y respuestas de RAG correctas, porque el trabajo pesado (encontrar el
-fragmento correcto) lo hace el recuperador, no el modelo.
+**Por qué el LLM remoto y los embeddings locales:** el análisis y la generación de exámenes
+exigen un modelo grande que en CPU tardaría decenas de minutos; Groq lo resuelve en segundos.
+Los embeddings, en cambio, son un modelo pequeño que corre bien en CPU y mantener el texto
+dentro de la infraestructura evita enviar el material completo a un tercero.
 
-Escalar es cambiar una variable:
+| Hardware | `GROQ_LLM_MODEL` sugerido |
+|----------|---------------------------|
+| Cualquiera (el LLM no corre en local) | `llama-3.3-70b-versatile` |
+| Cuota gratuita muy ajustada | `llama-3.1-8b-instant` |
 
-| Hardware | `OLLAMA_LLM_MODEL` |
-|----------|--------------------|
-| CPU 4 núcleos | `qwen2.5:1.5b-instruct` |
-| CPU 8+ núcleos | `llama3.2:3b-instruct` |
-| GPU | `qwen2.5:7b-instruct` |
-
-Todo se resuelve mediante `AIProviderFactory` según `AI_PROVIDER`; el dominio nunca conoce el proveedor.
+Todo se resuelve mediante `AIProviderFactory`; el dominio nunca conoce el proveedor.
 
 ## 3. Grafo del agente (LangGraph)
 
@@ -165,7 +161,8 @@ usuario (👍/👎). Todo alimenta `ai_usage_logs` y el panel "Utilización de I
 
 | Falla | Comportamiento |
 |-------|----------------|
-| Ollama no responde | 503 `AI_PROVIDER_UNAVAILABLE`; el mensaje del usuario se conserva y se ofrece reintento |
+| Groq no responde | 503 `AI_PROVIDER_UNAVAILABLE`; el mensaje del usuario se conserva y se ofrece reintento |
+| Groq aplica límite de uso (429) | Se espera lo que indica `Retry-After` / `x-ratelimit-reset-tokens` (hasta 70 s) y se reintenta |
 | Índice del proyecto no cargado | Se reconstruye en caliente desde PostgreSQL; mientras tanto, búsqueda full-text |
 | Modelo devuelve JSON inválido | *Output parser* correctivo (1 reintento) → si falla, resultado parcial marcado |
 | Timeout de herramienta | Se compone con lo disponible e informa qué no se pudo consultar |

@@ -110,7 +110,7 @@ export default function AdminDashboard() {
       <Grid container spacing={3}>
         <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={{ height: '100%' }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Typography variant="h4" gutterBottom>
                 Contenido y conocimiento
               </Typography>
@@ -156,7 +156,7 @@ export default function AdminDashboard() {
         <Grid size={{ xs: 12, md: 6 }}>
           <Stack spacing={3} sx={{ height: '100%' }}>
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 <Typography variant="h4" gutterBottom>
                   Aprendizaje
                 </Typography>
@@ -188,12 +188,12 @@ export default function AdminDashboard() {
             </Card>
 
             <Card>
-              <CardContent sx={{ p: 3 }}>
+              <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
                 <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
                   <AutoAwesome color="primary" />
                   <Typography variant="h4">Utilización de IA</Typography>
-                  {health.data?.free && (
-                    <Chip label="Gratuita · local" color="success" size="small" />
+                  {health.data?.embeddings_local && (
+                    <Chip label="Embeddings locales" color="success" size="small" />
                   )}
                 </Stack>
 
@@ -218,7 +218,8 @@ export default function AdminDashboard() {
 
                 {health.data && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
-                    Modelo: {health.data.llm_model} · Embeddings: {health.data.embedding_model}
+                    Modelo: {health.data.llm_model} ({health.data.provider}) · Embeddings:{' '}
+                    {health.data.embedding_model} ({health.data.embedding_provider})
                   </Typography>
                 )}
               </CardContent>

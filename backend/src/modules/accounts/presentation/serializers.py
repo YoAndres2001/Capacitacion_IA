@@ -136,7 +136,7 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
 
 
-class CapacitaTokenObtainPairSerializer(TokenObtainPairSerializer):
+class NexoraTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Añade al JWT los claims necesarios para autorizar sin consultar la BD."""
 
     username_field = "email"

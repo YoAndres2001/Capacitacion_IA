@@ -206,8 +206,10 @@ export interface MyTraining {
 }
 
 export interface MyTrainingDetail extends TrainingDetail {
-  enrollment: MyTraining;
+  /** Nulo en la vista previa del instructor: sin matrícula no hay progreso. */
+  enrollment: MyTraining | null;
   lesson_progress: Record<string, LessonProgress>;
+  preview: boolean;
 }
 
 export interface Enrollment {
@@ -238,6 +240,14 @@ export interface Transcript {
   confidence: number;
   full_text: string;
   segments: TranscriptSegment[];
+}
+
+/** Texto de un documento para leerlo dentro del reproductor. */
+export interface MaterialContent {
+  material_id: string;
+  type: MaterialType;
+  page_count: number;
+  blocks: Array<{ order: number; page: number | null; heading: string; text: string }>;
 }
 
 export interface Chapter {
@@ -455,12 +465,33 @@ export interface MyStats {
   ai: { questions_asked: number };
 }
 
+/** Serie de actividad del estudiante (vista «Progreso»). */
+export interface MyActivity {
+  range: { start: string; end: string; days: number };
+  daily: Array<{ date: string; seconds: number; lessons: number }>;
+  totals: { seconds: number; lessons: number; trainings: number };
+  trainings: Array<{
+    training_id: string;
+    title: string;
+    project_name: string;
+    status: EnrollmentStatus;
+    progress: number;
+    seconds: number;
+    lessons_viewed: number;
+    lessons_completed: number;
+    last_viewed_at: string | null;
+  }>;
+}
+
 export interface AIHealth {
   provider: string;
   llm_model: string;
+  whisper_model: string;
+  embedding_provider: string;
   embedding_model: string;
   available: boolean;
-  free: boolean;
+  /** Los embeddings se calculan en el worker, no en un servicio externo. */
+  embeddings_local: boolean;
 }
 
 /** Mensajes del WebSocket (docs/10-api-rest.md §11). */

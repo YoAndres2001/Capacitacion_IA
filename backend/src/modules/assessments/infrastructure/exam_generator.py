@@ -17,10 +17,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable
 
+from django.db.models import Sum
+from django.db.models.functions import Length
 from pydantic import BaseModel, Field, ValidationError
 
 from src.modules.ai.application.ports.llm import ChatMessage, LLMPort
 from src.modules.ai.infrastructure.models import Chunk
+from src.modules.ai.infrastructure.providers.parsing import strict_schema
 from src.modules.ai.infrastructure.usage import record_usage
 from src.shared.domain.exceptions import InsufficientContent
 from src.shared.domain.value_object import TokenUsage
@@ -31,13 +34,81 @@ from .models import Exam, Question, QuestionOption
 
 logger = get_logger("assessments.generator")
 
-MIN_CHUNKS = 5
+#: Cuánto material hace falta para generar un examen.
+#:
+#: Se mide en CARACTERES de texto disponible, no en número de fragmentos. Contar
+#: fragmentos parecía razonable pero medía el efecto de `CHUNK_SIZE_TOKENS`: con
+#: fragmentos de 800 tokens, un video de 90 s y un PDF corto caben en uno cada
+#: uno, y la capacitación quedaba bloqueada pese a tener contenido de sobra.
+#: Peor aún, subir el tamaño de fragmento —que mejora el RAG— volvía la puerta
+#: MÁS estricta sobre el mismo material.
+#:
+#: El requisito escala con las preguntas pedidas, que es la relación real: no es
+#: lo mismo redactar 5 preguntas que 30 sobre el mismo texto.
+MIN_CONTENT_CHARS_PER_QUESTION = 300
+
+#: Piso absoluto: por debajo no hay examen que valga, se pidan las que se pidan.
+MIN_CONTENT_CHARS = 1000
+
 DUPLICATE_THRESHOLD = 0.75
 
 #: Reparto de la barra de avance: un tramo fijo por preparar el material y el
 #: resto repartido entre los lotes, que es donde se va todo el tiempo real.
 PROGRESS_SETUP = 5
 PROGRESS_BATCHES = 95 - PROGRESS_SETUP
+
+
+def available_content_chars(training) -> int:
+    """Caracteres de material procesado y disponible de una capacitación."""
+    return (
+        Chunk.objects.filter(training=training, material__status="AVAILABLE").aggregate(
+            total=Sum(Length("content"))
+        )["total"]
+        or 0
+    )
+
+
+def max_questions_for(content_chars: int) -> int:
+    """Cuántas preguntas sostiene ese volumen de material."""
+    if content_chars < MIN_CONTENT_CHARS:
+        return 0
+    return max(1, content_chars // MIN_CONTENT_CHARS_PER_QUESTION)
+
+
+def assert_enough_content(training, num_questions: int, *, chunks: list | None = None) -> None:
+    """
+    Falla si el material no da para las preguntas pedidas.
+
+    La llama la vista ANTES de encolar la tarea, y también el generador. Que la
+    vista lo compruebe no es una optimización: el aviso de fallo viaja por
+    WebSocket y una tarea que muere en milisegundos lo emite antes de que el
+    navegador llegue a suscribirse, dejando la barra de progreso viva para
+    siempre. Lo que se sabe de antemano se responde de inmediato con un 4xx.
+    """
+    total = (
+        sum(len(chunk.content) for chunk in chunks)
+        if chunks is not None
+        else available_content_chars(training)
+    )
+    posibles = max_questions_for(total)
+
+    if posibles == 0:
+        raise InsufficientContent(
+            "La capacitación todavía no tiene material suficiente para generar una "
+            "evaluación. Sube contenido y espera a que termine de procesarse.",
+            details={"content_chars": total, "minimum": MIN_CONTENT_CHARS},
+        )
+
+    if num_questions > posibles:
+        raise InsufficientContent(
+            f"El material alcanza para unas {posibles} preguntas y se pidieron "
+            f"{num_questions}. Reduce la cantidad o añade más contenido.",
+            details={
+                "content_chars": total,
+                "requested": num_questions,
+                "max_questions": posibles,
+            },
+        )
 
 
 class OptionOut(BaseModel):
@@ -59,6 +130,10 @@ class QuestionOut(BaseModel):
 
 class QuestionsOut(BaseModel):
     questions: list[QuestionOut] = Field(default_factory=list)
+
+
+#: Se calcula una vez al importar: el esquema no cambia entre llamadas.
+_QUESTIONS_SCHEMA = strict_schema(QuestionsOut)
 
 
 #: El MATERIAL va primero y la restricción se repite justo antes de la orden
@@ -120,9 +195,9 @@ class GenerationRequest:
     max_attempts: int = 3
     time_limit_minutes: int = 0
     created_by: Any = None
-    #: Se invoca tras cada lote con el avance. Generar un examen tarda decenas de
-    #: minutos en CPU: sin esto la interfaz no puede distinguir "trabajando" de
-    #: "colgado".
+    #: Se invoca tras cada lote con el avance. Con un modelo local en CPU esto
+    #: tarda decenas de minutos, y con un proveedor remoto un 429 puede parar el
+    #: lote un minuto: sin esto la interfaz no distingue "trabajando" de "colgado".
     on_progress: Callable[[dict[str, Any]], None] | None = None
 
 
@@ -132,11 +207,9 @@ class ExamGenerator:
 
     def generate(self, request: GenerationRequest) -> Exam:
         chunks = self._select_chunks(request.training, request.num_questions)
-        if len(chunks) < MIN_CHUNKS:
-            raise InsufficientContent(
-                "La capacitación necesita más material procesado para generar una evaluación.",
-                details={"chunks": len(chunks), "minimum": MIN_CHUNKS},
-            )
+        # Se revalida aquí aunque la vista ya lo haya comprobado: entre la
+        # petición y la ejecución de la tarea el material pudo eliminarse.
+        assert_enough_content(request.training, request.num_questions, chunks=chunks)
 
         distribution = request.distribution or self._default_distribution(request.num_questions)
 
@@ -359,7 +432,10 @@ class ExamGenerator:
         total_usage = TokenUsage()
         for attempt in (1, 2):
             try:
-                raw, usage = self._llm.generate_json(messages)
+                # Con el esquema, el adaptador pide Structured Outputs si el
+                # modelo configurado los admite; si no, degrada a modo JSON y
+                # aquí sigue actuando la validación Pydantic con reintento.
+                raw, usage = self._llm.generate_json(messages, schema=_QUESTIONS_SCHEMA)
                 total_usage = total_usage + usage
             except ValueError as exc:
                 # El modelo devolvió texto que no es JSON. Se reintenta una vez

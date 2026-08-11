@@ -82,7 +82,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
         get_notifier().send_email(
             to=[user.email],
-            subject="Bienvenido a Capacita IA",
+            subject="Bienvenido a Nexora",
             template="user_invitation",
             context={
                 "user_name": user.get_short_name(),
@@ -163,7 +163,7 @@ class UserViewSet(viewsets.ModelViewSet):
             created.append(user)
             get_notifier().send_email(
                 to=[email],
-                subject="Bienvenido a Capacita IA",
+                subject="Bienvenido a Nexora",
                 template="user_invitation",
                 context={
                     "user_name": user.get_short_name(),

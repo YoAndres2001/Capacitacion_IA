@@ -93,13 +93,13 @@ export default function ProjectsPage() {
       ) : (
         <Grid container spacing={2.5}>
           {items.map((project) => (
-            <Grid size={{ xs: 12, sm: 6, lg: 4 }} key={project.id}>
+            <Grid size={{ xs: 12, sm: 6, lg: 4, xl: 3 }} key={project.id}>
               <Card sx={{ height: '100%', borderTop: 4, borderColor: project.color }}>
                 <CardActionArea
                   onClick={() => navigate(`/proyectos/${project.id}`)}
                   sx={{ height: '100%', alignItems: 'stretch' }}
                 >
-                  <CardContent sx={{ p: 2.5 }}>
+                  <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                     <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
                       <Box>
                         <Typography variant="h4">{project.name}</Typography>

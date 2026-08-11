@@ -177,6 +177,7 @@ class ChatConsumer(AuthenticatedConsumer):
         )
 
     async def token(self, event: dict[str, Any]) -> None:
+        """Tokens publicados en el grupo por otro proceso (p. ej. otra pestaña)."""
         await self.send_json({"type": "token", "content": event.get("content", "")})
 
     # ── Ejecución del caso de uso ────────────────────────────
@@ -191,11 +192,20 @@ class ChatConsumer(AuthenticatedConsumer):
         from src.modules.ai.presentation.views import build_retriever
         from src.shared.container import get_llm
 
-        layer = self.channel_layer
-        group = self.group_name
+        # Los tokens se escriben DIRECTAMENTE en este socket, no por el grupo.
+        #
+        # Publicarlos en el grupo los hacía llegar SIEMPRE después de la
+        # respuesta final: Channels despacha los mensajes de un consumer en
+        # serie, y este está ocupado esperando justo a esta función, así que los
+        # tokens se encolaban hasta que terminaba. El panel ya había cerrado el
+        # mensaje en curso y los tokens tardíos reconstruían un texto fantasma
+        # que se quedaba pegado bajo la respuesta buena.
+        #
+        # `send_json` no pasa por esa cola: escribe en la conexión.
+        send = self.send_json
 
         def emit(chunk: str) -> None:
-            async_to_sync(layer.group_send)(group, {"type": "token", "content": chunk})
+            async_to_sync(send)({"type": "token", "content": chunk})
 
         result = AnswerQuestionUseCase(
             llm=get_llm(), retriever_factory=build_retriever

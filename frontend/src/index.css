@@ -11,9 +11,64 @@ body,
   margin: 0;
 }
 
+html {
+  /* Que rotar el teléfono no agrande el texto por su cuenta. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ningún elemento puede provocar desplazamiento lateral de la página: lo que
+   se desborde (tablas, gráficos) debe hacerlo dentro de su propia caja.
+   Se usa `clip` y no `hidden` a propósito: `hidden` convertiría a #root en un
+   contenedor de scroll y rompería el `position: sticky` de la barra de avance
+   del examen. */
+#root {
+  overflow-x: clip;
+}
+
+/* Nada con tamaño propio puede exceder el ancho de su contenedor. */
+img,
+video,
+audio,
+canvas,
+svg,
+iframe {
+  max-width: 100%;
+}
+
+img,
+video {
+  height: auto;
+}
+
+/* Palabras muy largas (URLs, nombres de archivo) rompen la línea en vez de
+   ensanchar la caja que las contiene. */
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
+}
+
+/* ── Variables de layout ──────────────────────────────────────
+   Las consume `AppLayout`; cambiarlas aquí reacomoda toda la aplicación.
+   --app-gutter     margen interior del área de contenido
+   --app-max-width  ancho máximo del contenido (evita líneas kilométricas)
+   --app-safe-*     respeto por el notch y la barra gestual del móvil        */
+:root {
+  --app-gutter: 24px;
+  --app-max-width: 1440px;
+  --app-safe-left: env(safe-area-inset-left, 0px);
+  --app-safe-right: env(safe-area-inset-right, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* La barra de scroll no debe romper el modo oscuro */
@@ -38,6 +93,66 @@ mark {
   color: inherit;
   padding: 0 2px;
   border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Pantallas
+   Los cortes son los mismos que declara el tema de MUI en
+   `src/app/theme.ts` (BREAKPOINTS). Los límites llevan decimales para
+   que los rangos no se solapen ni dejen huecos entre 750/1024/1366.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Pequeñas pantallas (teléfonos) · hasta 750 px ───────────── */
+@media only screen and (max-width: 749.95px) {
+  :root {
+    --app-gutter: 12px;
+    --app-max-width: 100%;
+  }
+
+  /* Barras de scroll finas: en pantallas angostas 10 px son 3 % del ancho. */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  /* Toda tabla se desplaza dentro de su contenedor en vez de estirar la
+     página; sin esto una tabla de 7 columnas rompe el layout completo. */
+  table {
+    width: 100%;
+  }
+}
+
+/* ── Pantallas medianas (tabletas) · 750 px a 1024 px ────────── */
+@media only screen and (min-width: 750px) and (max-width: 1024.95px) {
+  :root {
+    --app-gutter: 20px;
+    --app-max-width: 100%;
+  }
+}
+
+/* ── Pantallas grandes (notebooks) · 1025 px a 1366 px ───────── */
+@media only screen and (min-width: 1025px) and (max-width: 1366.95px) {
+  :root {
+    --app-gutter: 24px;
+    --app-max-width: 100%;
+  }
+}
+
+/* ── Pantallas extra grandes (monitores) · desde 1367 px ─────── */
+@media only screen and (min-width: 1367px) {
+  :root {
+    --app-gutter: 32px;
+    /* En un monitor ancho el contenido se centra: leer líneas de 1800 px
+       cansa y las tarjetas quedan desproporcionadas. */
+    --app-max-width: 1600px;
+  }
+}
+
+/* En pantallas táctiles el `hover` se queda "pegado" tras tocar: se anula. */
+@media (hover: none) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(128, 128, 128, 0.35);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

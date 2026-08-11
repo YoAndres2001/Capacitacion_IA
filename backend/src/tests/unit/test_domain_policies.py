@@ -88,6 +88,25 @@ def test_leccion_se_completa_al_90_por_ciento():
     assert not ProgressCalculator.should_complete_lesson(800, 1000)
 
 
+def test_sin_duracion_conocida_no_basta_el_primer_latido():
+    """
+    Antes bastaba `watched_seconds > 0`, así que el primer latido —a los diez
+    segundos— daba la lección por vista. Importa desde que el reproductor
+    consigue guardar progreso: hasta ahora la rama nunca se ejercitaba.
+    """
+    from src.modules.trainings.domain.progress import MIN_WATCHED_SECONDS
+
+    assert not ProgressCalculator.should_complete_lesson(10, 0)
+    assert not ProgressCalculator.should_complete_lesson(MIN_WATCHED_SECONDS - 1, 0)
+
+
+def test_sin_duracion_conocida_se_completa_pasado_el_minimo():
+    from src.modules.trainings.domain.progress import MIN_WATCHED_SECONDS
+
+    assert ProgressCalculator.should_complete_lesson(MIN_WATCHED_SECONDS, 0)
+    assert ProgressCalculator.should_complete_lesson(600, 0)
+
+
 def test_examen_requiere_avance_minimo():
     assert ProgressCalculator.can_take_exam(85.0, 80)
     assert not ProgressCalculator.can_take_exam(75.0, 80)

@@ -6,6 +6,14 @@ from dataclasses import dataclass
 
 COMPLETION_THRESHOLD = 0.9  # 90 % de reproducción marca la lección como completada (RF-033)
 
+#: Reproducción mínima para completar una lección cuya duración se desconoce.
+#:
+#: Pasa cuando el análisis del archivo no logró determinarla. Sin este piso
+#: bastaba `watched_seconds > 0` y el primer latido —a los diez segundos— daba
+#: la lección por vista. Las lecciones de documento no llegan aquí: no tienen
+#: reproducción y su avance se marca como completadas, de forma explícita.
+MIN_WATCHED_SECONDS = 60
+
 
 @dataclass(frozen=True)
 class LessonProgressSnapshot:
@@ -41,8 +49,14 @@ class ProgressCalculator:
 
     @staticmethod
     def should_complete_lesson(watched_seconds: int, duration_seconds: int) -> bool:
+        """
+        Con duración conocida se exige haber reproducido el 90 %.
+
+        Sin ella no hay porcentaje que calcular y se exige un mínimo absoluto
+        (ver `MIN_WATCHED_SECONDS`).
+        """
         if duration_seconds <= 0:
-            return watched_seconds > 0
+            return watched_seconds >= MIN_WATCHED_SECONDS
         return watched_seconds / duration_seconds >= COMPLETION_THRESHOLD
 
     @staticmethod

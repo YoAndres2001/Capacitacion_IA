@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import mimetypes
+import re
 import uuid
 from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Count, Q
-from django.http import FileResponse, HttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.utils import timezone
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import NotFound
 from rest_framework.generics import ListAPIView
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -358,7 +362,17 @@ class LessonViewSet(
         responses=LessonProgressSerializer,
         summary="Guardar posición de reproducción",
     )
-    @action(detail=True, methods=["patch"], permission_classes=[IsAuthenticated])
+    # `parser_classes` es obligatorio aquí. La clase los fija en multipart por la
+    # subida de archivos de la lección, y eso hacía que este endpoint rechazara
+    # con 415 el JSON que envía el reproductor. Como la mutación del frontend no
+    # mira el error, fallaba en silencio: NINGUNA lección registraba tiempo ni
+    # fecha de visualización, y la página «Mi progreso» salía siempre vacía.
+    @action(
+        detail=True,
+        methods=["patch"],
+        permission_classes=[IsAuthenticated],
+        parser_classes=[JSONParser],
+    )
     def progress(self, request, pk=None):
         lesson = self.get_object()
         enrollment = self._enrollment_for(request.user, lesson)
@@ -405,7 +419,12 @@ class LessonViewSet(
         )
 
     @extend_schema(tags=["Aprendizaje"], summary="Notas personales de la lección")
-    @action(detail=True, methods=["get", "post"], permission_classes=[IsAuthenticated])
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        permission_classes=[IsAuthenticated],
+        parser_classes=[JSONParser],
+    )
     def notes(self, request, pk=None):
         lesson = self.get_object()
 
@@ -425,9 +444,13 @@ class LessonViewSet(
         responses=UploadSessionSerializer,
         summary="Iniciar carga por trozos (archivos grandes)",
     )
+    # El cuerpo es JSON (nombre, tamaño y tipo del archivo); los trozos van
+    # aparte, en multipart, a `UploadChunkView`. Sin este parser la clase
+    # imponía multipart y el 415 rompía toda carga de más de 20 MB.
     @action(
         detail=True, methods=["post"], url_path="materials/upload-session",
         permission_classes=[IsInstructor], throttle_scope="upload",
+        parser_classes=[JSONParser],
     )
     def upload_session(self, request, pk=None):
         lesson = self.get_object()
@@ -780,6 +803,71 @@ class MaterialViewSet(
         material = self._queryable(request, pk)
         return Response(FaqSerializer(material.faqs.all(), many=True).data)
 
+    @extend_schema(
+        tags=["Materiales"],
+        summary="Contenido en texto para leer el documento en la plataforma",
+    )
+    @action(detail=True, methods=["get"])
+    def content(self, request, pk=None):
+        """
+        Devuelve el texto del documento en bloques (página / título).
+
+        El navegador solo sabe mostrar PDF y texto plano; para Word y
+        PowerPoint esta es la forma de leerlos dentro del reproductor sin
+        descargarlos. Se extrae del archivo original —no de los chunks, que
+        se solapan— y se cachea porque el archivo es inmutable.
+        """
+        material = self.get_object()
+        self._assert_access(request.user, material)
+
+        if material.type in {Material.Type.VIDEO, Material.Type.AUDIO}:
+            return Response(
+                {"detail": "Este material es audiovisual; usa la transcripción."}, status=400
+            )
+
+        cache_key = f"material:content:{material.id}:{material.sha256[:16]}"
+        if (cached := cache.get(cache_key)) is not None:
+            return Response(cached)
+
+        storage = get_storage()
+        if not storage.exists(material.file):
+            raise NotFound("El archivo no está disponible.")
+
+        from src.modules.ai.infrastructure.extraction.factory import ExtractorFactory
+
+        try:
+            extraction = ExtractorFactory.for_type(material.type).extract(
+                storage.absolute_path(material.file)
+            )
+        except Exception as error:  # el archivo puede estar dañado o protegido
+            return Response(
+                {
+                    "error": {
+                        "code": "CONTENT_UNAVAILABLE",
+                        "message": "No se pudo leer el contenido del documento.",
+                        "details": {"reason": str(error)[:200]},
+                    }
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        payload = {
+            "material_id": str(material.id),
+            "type": material.type,
+            "page_count": extraction.page_count or material.page_count,
+            "blocks": [
+                {
+                    "order": block.order,
+                    "page": block.page,
+                    "heading": block.heading or "",
+                    "text": block.text,
+                }
+                for block in extraction.blocks
+            ],
+        }
+        cache.set(cache_key, payload, timeout=3600)
+        return Response(payload)
+
     # ── Interno ──────────────────────────────────────────────
     def _queryable(self, request, pk) -> Material:
         material = self.get_object()
@@ -826,14 +914,28 @@ class MyTrainingDetailView(APIView):
             .select_related("training__project")
             .first()
         )
-        if enrollment is None:
-            raise NotEnrolled
 
         training = (
             Training.objects.filter(pk=training_id)
+            .select_related("project")
             .prefetch_related("modules__lessons__materials")
             .first()
         )
+
+        if enrollment is None:
+            # Vista previa (RF-029): quien gestiona el contenido de la empresa
+            # puede abrir el reproductor sin matricularse, para revisar el curso
+            # tal como lo verá el estudiante antes de publicarlo. Es solo
+            # lectura: sin matrícula no hay progreso que registrar.
+            if training is None or not self._may_preview(request.user, training):
+                raise NotEnrolled
+
+            data = TrainingDetailSerializer(training).data
+            data["enrollment"] = None
+            data["lesson_progress"] = {}
+            data["preview"] = True
+            return Response(data)
+
         progress_map = {
             str(record.lesson_id): LessonProgressSerializer(record).data
             for record in LessonProgress.objects.filter(enrollment=enrollment)
@@ -842,7 +944,12 @@ class MyTrainingDetailView(APIView):
         data = TrainingDetailSerializer(training).data
         data["enrollment"] = MyTrainingSerializer(enrollment).data
         data["lesson_progress"] = progress_map
+        data["preview"] = False
         return Response(data)
+
+    @staticmethod
+    def _may_preview(user, training) -> bool:
+        return user.can_manage_content and user.belongs_to(training.project.company_id)
 
 
 class NoteDetailView(APIView):
@@ -878,15 +985,22 @@ class EnrollmentDetailView(APIView):
 # ═════════════════════════════════════════════════════════════
 #  Media protegida
 # ═════════════════════════════════════════════════════════════
+RANGE_PATTERN = re.compile(r"bytes=(\d*)-(\d*)")
+RANGE_CHUNK = 512 * 1024
+
+
 @extend_schema(tags=["Materiales"], summary="Servir media protegida (URL firmada)")
 @api_view(["GET"])
 @permission_classes([AllowAny])  # la autorización va en la firma del token
+@xframe_options_sameorigin  # el visor de PDF de la plataforma lo muestra en un iframe
 def serve_protected_media(request, token: str):
     """
     Entrega el archivo validando la firma temporal.
 
     En producción se delega a nginx con `X-Accel-Redirect`, de modo que ningún
-    worker de Python queda ocupado sirviendo un video de 2 GB.
+    worker de Python queda ocupado sirviendo un video de 2 GB. En desarrollo lo
+    sirve Django, atendiendo `Range` para que el navegador pueda buscar dentro
+    del video en vez de descargarlo entero.
     """
     storage = get_storage()
     try:
@@ -898,9 +1012,55 @@ def serve_protected_media(request, token: str):
         raise NotFound("Archivo no encontrado.")
 
     if settings.DEBUG:
-        return FileResponse(storage.open(relative))
+        return _serve_local_file(request, storage, relative)
 
     response = HttpResponse()
     response["X-Accel-Redirect"] = f"/protected-media/{relative}"
     response["Content-Type"] = ""
+    return response
+
+
+def _serve_local_file(request, storage, relative: str):
+    """Entrega el archivo desde el disco local con soporte de `Range`."""
+    path = storage.absolute_path(relative)
+    size = path.stat().st_size
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+    match = RANGE_PATTERN.fullmatch(request.headers.get("Range", "").strip())
+    if not match:
+        response = FileResponse(path.open("rb"), content_type=content_type)
+        response["Accept-Ranges"] = "bytes"
+        response["Content-Disposition"] = f'inline; filename="{path.name}"'
+        return response
+
+    first, last = match.groups()
+    if first:
+        start = int(first)
+        end = int(last) if last else size - 1
+    else:  # sufijo: los últimos N bytes
+        start = max(0, size - int(last or 0))
+        end = size - 1
+    end = min(end, size - 1)
+
+    if start > end or start >= size:
+        response = HttpResponse(status=416)
+        response["Content-Range"] = f"bytes */{size}"
+        return response
+
+    def stream():
+        remaining = end - start + 1
+        with path.open("rb") as handle:
+            handle.seek(start)
+            while remaining > 0:
+                data = handle.read(min(RANGE_CHUNK, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    response = StreamingHttpResponse(stream(), status=206, content_type=content_type)
+    response["Content-Range"] = f"bytes {start}-{end}/{size}"
+    response["Content-Length"] = str(end - start + 1)
+    response["Accept-Ranges"] = "bytes"
+    response["Content-Disposition"] = f'inline; filename="{path.name}"'
     return response

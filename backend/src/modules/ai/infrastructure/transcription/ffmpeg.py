@@ -65,10 +65,12 @@ def probe(path: Path) -> MediaInfo:
 
 def extract_audio(source: Path, target: Path) -> Path:
     """
-    Extrae el audio a WAV 16 kHz mono PCM: el formato que espera Whisper.
+    Extrae el audio a FLAC 16 kHz mono: el formato que recomienda Groq Whisper.
 
-    Convertir aquí evita que el modelo haga la conversión en memoria y reduce
-    notablemente el uso de RAM del worker.
+    16 kHz mono es la frecuencia a la que Whisper trabaja internamente, así que
+    no se pierde información. FLAC es sin pérdida y pesa alrededor de la mitad
+    que el WAV equivalente, lo que importa porque el archivo viaja por red hasta
+    Groq y hay un tope de tamaño por petición.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -76,7 +78,7 @@ def extract_audio(source: Path, target: Path) -> Path:
             [
                 "ffmpeg", "-y", "-i", str(source),
                 "-vn", "-ac", "1", "-ar", "16000",
-                "-c:a", "pcm_s16le", "-f", "wav", str(target),
+                "-c:a", "flac", str(target),
             ],
             capture_output=True,
             text=True,
@@ -93,6 +95,111 @@ def extract_audio(source: Path, target: Path) -> Path:
     if not target.exists() or target.stat().st_size == 0:
         raise AudioExtractionFailed("El audio extraído está vacío.")
     return target
+
+
+@dataclass(frozen=True)
+class AudioSlice:
+    """Un trozo de audio y el segundo del original en el que empieza."""
+
+    path: Path
+    offset_seconds: float
+
+
+def split_audio(source: Path, out_dir: Path, *, chunk_seconds: int) -> list[AudioSlice]:
+    """
+    Parte el audio en trozos de duración fija para poder subirlos de uno en uno.
+
+    Cada trozo se **recodifica** en vez de copiarse (`-c copy`): el copiado
+    directo corta en el límite de paquete y puede dejar partes con la cabecera
+    FLAC incompleta, que Groq rechaza. El audio ya es 16 kHz mono, así que
+    recodificar cuesta segundos y garantiza archivos válidos.
+
+    `-reset_timestamps 1` hace que cada parte empiece en 0:00; el
+    desplazamiento real respecto del original lo declara ffmpeg en la lista de
+    segmentos (`-segment_list`), y es lo que se suma a los timestamps de Groq
+    para reconstruir la línea de tiempo global. Sin él, todas las partes
+    parecerían empezar al principio del video y las citas del chat apuntarían al
+    minuto equivocado.
+
+    El desplazamiento se lee de esa lista y no de `ffprobe`: los FLAC que
+    produce el segmentador llevan `total_samples = 0` en su STREAMINFO —el
+    muxer no conoce la duración mientras escribe— y `ffprobe` devuelve 0 o la
+    duración del archivo completo. Medido en este proyecto sobre 25 s partidos
+    en tres: `0.00`, `0.00` y `25.00`. La lista de segmentos, en cambio, la
+    escribe el propio ffmpeg con los cortes exactos que aplicó.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pattern = str(out_dir / "part_%04d.flac")
+    listing = out_dir / "segments.csv"
+
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(source),
+                "-f", "segment",
+                "-segment_time", str(chunk_seconds),
+                "-segment_format", "flac",
+                "-segment_list", str(listing),
+                "-segment_list_type", "csv",
+                "-reset_timestamps", "1",
+                "-ac", "1", "-ar", "16000", "-c:a", "flac",
+                pattern,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60 * 60,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AudioExtractionFailed(
+            f"No se pudo dividir el audio: {exc.stderr[-500:] if exc.stderr else exc}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AudioExtractionFailed("La división del audio superó el tiempo límite.") from exc
+
+    parts = sorted(out_dir.glob("part_*.flac"))
+    if not parts:
+        raise AudioExtractionFailed("La división del audio no produjo ningún trozo.")
+
+    starts = _segment_starts(listing)
+    return [
+        AudioSlice(
+            path=part,
+            # Reserva por si la lista no se pudo leer: el segmentador corta
+            # contra la línea de tiempo ABSOLUTA (el corte n se busca a partir
+            # del segundo n por chunk_seconds), así que el error se limita a la
+            # duración de un frame y no se acumula entre partes.
+            offset_seconds=starts.get(part.name, float(index * chunk_seconds)),
+        )
+        for index, part in enumerate(parts)
+    ]
+
+
+def _segment_starts(listing: Path) -> dict[str, float]:
+    """
+    Lee `nombre,inicio,fin` de la lista de segmentos de ffmpeg.
+
+    Devuelve `{}` ante cualquier problema: el llamador tiene una reserva
+    razonable y quedarse sin trocear el audio sería mucho peor que un
+    desplazamiento con precisión de frame.
+    """
+    if not listing.exists():
+        return {}
+    try:
+        rows = listing.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    starts: dict[str, float] = {}
+    for row in rows:
+        fields = row.split(",")
+        if len(fields) < 2:
+            continue
+        try:
+            starts[Path(fields[0]).name] = float(fields[1])
+        except ValueError:
+            continue
+    return starts
 
 
 def extract_thumbnail(source: Path, target: Path, *, at_second: int = 3) -> Path | None:

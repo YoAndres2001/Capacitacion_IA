@@ -122,9 +122,9 @@ TEMPLATES = [
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("POSTGRES_DB", "capacita"),
-        "USER": env("POSTGRES_USER", "capacita"),
-        "PASSWORD": env("POSTGRES_PASSWORD", "capacita"),
+        "NAME": env("POSTGRES_DB", "nexora"),
+        "USER": env("POSTGRES_USER", "nexora"),
+        "PASSWORD": env("POSTGRES_PASSWORD", "nexora"),
         "HOST": env("POSTGRES_HOST", "localhost"),
         "PORT": env("POSTGRES_PORT", "5432"),
         "CONN_MAX_AGE": 60,
@@ -219,12 +219,12 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
     "TOKEN_OBTAIN_SERIALIZER": (
-        "src.modules.accounts.presentation.serializers.CapacitaTokenObtainPairSerializer"
+        "src.modules.accounts.presentation.serializers.NexoraTokenObtainPairSerializer"
     ),
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Capacita IA · API",
+    "TITLE": "Nexora · API",
     "DESCRIPTION": (
         "Plataforma de capacitaciones con Inteligencia Artificial. "
         "RAG sobre videos y documentos, tutor virtual y evaluaciones automáticas."
@@ -316,30 +316,34 @@ EMAIL_PORT = env_int("EMAIL_PORT", 1025)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", False)
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@capacita.local")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@nexora.local")
 FRONTEND_URL = env("FRONTEND_URL", "http://localhost:5173")
 
 # ─────────────────────────────────────────────────────────────
-#  IA · proveedor DESACOPLADO (gratis por defecto)
+#  IA · Groq es el ÚNICO proveedor externo
 # ─────────────────────────────────────────────────────────────
+#  Groq resuelve LLM y transcripción (Whisper). Los embeddings se calculan en
+#  local con SentenceTransformers y se almacenan en FAISS: no salen de la
+#  infraestructura ni requieren una segunda cuenta.
+#
+#  La clave se lee SOLO de la variable de entorno GROQ_API_KEY. Nunca se
+#  escribe en código, imagen ni archivo versionado.
 AI_SETTINGS = {
-    "PROVIDER": env("AI_PROVIDER", "ollama"),  # ollama | openai
-    "OLLAMA": {
-        "BASE_URL": env("OLLAMA_BASE_URL", "http://localhost:11434"),
-        # Por defecto un modelo apto para CPU; con GPU conviene qwen2.5:7b-instruct.
-        "LLM_MODEL": env("OLLAMA_LLM_MODEL", "qwen2.5:1.5b-instruct"),
-        "EMBEDDING_MODEL": env("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"),
-        "TIMEOUT": env_int("OLLAMA_TIMEOUT", 900),
-        # Techo de la ventana de contexto. El valor real se calcula por llamada
-        # (ver `fit_context`): en CPU una ventana grande cuesta caro aunque no
-        # se use, así que solo se amplía cuando el prompt lo exige.
-        "MAX_CTX": env_int("OLLAMA_MAX_CTX", 8192),
-    },
-    "OPENAI": {
-        "API_KEY": env("OPENAI_API_KEY"),
-        "BASE_URL": env("OPENAI_BASE_URL") or None,
-        "LLM_MODEL": env("OPENAI_LLM_MODEL", "gpt-4o-mini"),
-        "EMBEDDING_MODEL": env("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+    "GROQ": {
+        "API_KEY": env("GROQ_API_KEY"),
+        "BASE_URL": env("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+        # Modelos disponibles en https://console.groq.com/docs/models
+        #   llama-3.3-70b-versatile   equilibrio calidad/velocidad (por defecto)
+        #   llama-3.1-8b-instant      el más rápido y barato, JSON menos fiable
+        #   openai/gpt-oss-120b       mayor calidad de razonamiento, más lento
+        "LLM_MODEL": env("GROQ_LLM_MODEL", "llama-3.3-70b-versatile"),
+        # Speech-to-Text. `whisper-large-v3` da timestamps por segmento;
+        # `whisper-large-v3-turbo` es más rápido y algo menos preciso.
+        "WHISPER_MODEL": env("GROQ_WHISPER_MODEL", "whisper-large-v3"),
+        "TIMEOUT": env_int("GROQ_TIMEOUT", 120),
+        # La API de transcripción sube el audio completo: necesita más margen
+        # que una llamada de chat.
+        "TRANSCRIBE_TIMEOUT": env_int("GROQ_TRANSCRIBE_TIMEOUT", 600),
     },
     "TEMPERATURE": env_float("LLM_TEMPERATURE", 0.1),
     "MAX_TOKENS": env_int("LLM_MAX_TOKENS", 1024),
@@ -354,20 +358,46 @@ AI_SETTINGS = {
     "EXAM_BATCH_SIZE": env_int("AI_EXAM_BATCH_SIZE", 2),
 }
 
-WHISPER_SETTINGS = {
-    "MODEL": env("WHISPER_MODEL", "small"),
-    "DEVICE": env("WHISPER_DEVICE", "cpu"),
-    "COMPUTE_TYPE": env("WHISPER_COMPUTE_TYPE", "int8"),
-    "BEAM_SIZE": env_int("WHISPER_BEAM_SIZE", 5),
+# ── Embeddings LOCALES (SentenceTransformers) ────────────────
+#  Se ejecutan dentro del worker; no hay ninguna llamada externa.
+#
+#  `multilingual-e5-small` (384 dims) está entrenado para búsqueda ASIMÉTRICA
+#  —pregunta corta contra pasaje largo—, que es exactamente lo que hace el RAG.
+#  Los modelos `paraphrase-*`, pensados para comparar frases equivalentes, se
+#  midieron en este proyecto sobre material de capacitación y confundían el
+#  fragmento correcto y dejaban solo 0,009 de margen entre una pregunta
+#  respondible y una que no lo está: insuficiente para cualquier umbral.
+#
+#  E5 exige prefijar el texto ("query:" / "passage:"); sin ellos su calidad cae.
+#  Son configurables para poder usar un modelo que no los necesite (déjalos
+#  vacíos en ese caso).
+#
+#  Cambiar de modelo cambia la dimensión del vector y obliga a reconstruir los
+#  índices:  python manage.py rebuild_indices
+EMBEDDING_SETTINGS = {
+    "MODEL": env("EMBEDDING_MODEL", "intfloat/multilingual-e5-small"),
+    "DEVICE": env("EMBEDDING_DEVICE", "cpu"),
+    "BATCH_SIZE": env_int("EMBEDDING_BATCH_SIZE", 32),
+    "QUERY_PREFIX": env("EMBEDDING_QUERY_PREFIX", "query: "),
+    "PASSAGE_PREFIX": env("EMBEDDING_PASSAGE_PREFIX", "passage: "),
 }
 
 RAG_SETTINGS = {
     "INDEX_ROOT": Path(env("FAISS_INDEX_ROOT", str(BASE_DIR / "indices"))),
-    "CHUNK_SIZE_TOKENS": env_int("CHUNK_SIZE_TOKENS", 800),
-    "CHUNK_OVERLAP_TOKENS": env_int("CHUNK_OVERLAP_TOKENS", 120),
-    "TOP_K": env_int("RETRIEVER_TOP_K", 8),
-    "MIN_SCORE": env_float("RETRIEVER_MIN_SCORE", 0.35),
-    "MIN_TOP_SCORE": env_float("RETRIEVER_MIN_TOP_SCORE", 0.45),
+    "CHUNK_SIZE_TOKENS": env_int("RAG_CHUNK_SIZE", env_int("CHUNK_SIZE_TOKENS", 800)),
+    "CHUNK_OVERLAP_TOKENS": env_int("RAG_CHUNK_OVERLAP", env_int("CHUNK_OVERLAP_TOKENS", 120)),
+    "TOP_K": env_int("RAG_TOP_K", env_int("RETRIEVER_TOP_K", 8)),
+    # Umbrales de la GroundingPolicy. **Dependen del modelo de embeddings**: la
+    # escala de similitud no es comparable entre modelos. E5 comprime los
+    # valores hacia arriba (medido sobre material de capacitación: fragmentos
+    # relevantes ~0,82-0,89 y consultas ajenas ~0,71-0,81), así que los 0,35 y
+    # 0,45 del modelo anterior dejarían pasar cualquier cosa y la IA respondería
+    # con contexto irrelevante en vez de admitir que no sabe.
+    #
+    # Al cambiar EMBEDDING_MODEL hay que recalibrarlos:
+    #     python manage.py rag_eval --training <uuid>
+    "MIN_SCORE": env_float("RETRIEVER_MIN_SCORE", 0.78),
+    "MIN_TOP_SCORE": env_float("RETRIEVER_MIN_TOP_SCORE", 0.82),
     "HYBRID": env_bool("HYBRID_SEARCH_ENABLED", True),
     "EMBED_BATCH_SIZE": 64,
     "MMR_LAMBDA": 0.7,
@@ -432,6 +462,6 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
     "loggers": {
         "django.db.backends": {"level": "WARNING", "handlers": ["console"], "propagate": False},
-        "capacita": {"level": LOG_LEVEL, "handlers": ["console"], "propagate": False},
+        "nexora": {"level": LOG_LEVEL, "handlers": ["console"], "propagate": False},
     },
 }

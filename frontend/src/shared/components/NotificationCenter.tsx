@@ -58,20 +58,23 @@ export function NotificationCenter() {
         onClose={() => setAnchorEl(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        // Sin límite, en un teléfono de 360 px el panel de 340 px se pega a los
+        // bordes; el margen deja ver que hay página detrás.
+        slotProps={{ paper: { sx: { maxWidth: 'calc(100vw - 24px)' } } }}
       >
-        <Box sx={{ width: 340 }}>
+        <Box sx={{ width: { xs: 'calc(100vw - 24px)', sm: 360 } }}>
           <Box sx={{ px: 2, py: 1.5 }}>
             <Typography variant="subtitle2">Notificaciones</Typography>
           </Box>
           <Divider />
           {items.length === 0 ? (
-            <Box sx={{ p: 3, textAlign: 'center' }}>
+            <Box sx={{ p: { xs: 2, sm: 3 }, textAlign: 'center' }}>
               <Typography variant="body2" color="text.secondary">
                 No tienes notificaciones nuevas.
               </Typography>
             </Box>
           ) : (
-            <List dense sx={{ maxHeight: 380, overflowY: 'auto' }}>
+            <List dense sx={{ maxHeight: { xs: '60vh', sm: 380 }, overflowY: 'auto' }}>
               {items.map((item) => (
                 <ListItemButton
                   key={item.id}
@@ -142,7 +145,7 @@ function describe(message: Extract<WsMessage, { type: 'notification' }>): Notifi
         id,
         title: 'Nueva capacitación asignada',
         detail: 'Revisa tus cursos pendientes.',
-        path: '/mis-cursos',
+        path: '/inicio',
         at: new Date(),
       };
     default:

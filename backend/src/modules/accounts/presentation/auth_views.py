@@ -28,7 +28,7 @@ from ..application.use_cases.manage_password import (
 )
 from ..infrastructure.models import AuditLog
 from .serializers import (
-    CapacitaTokenObtainPairSerializer,
+    NexoraTokenObtainPairSerializer,
     ChangePasswordSerializer,
     LoginSerializer,
     PasswordResetConfirmSerializer,
@@ -69,7 +69,7 @@ class LoginView(APIView):
             )
         )
 
-        refresh = CapacitaTokenObtainPairSerializer.get_token(result.user)
+        refresh = NexoraTokenObtainPairSerializer.get_token(result.user)
         return Response(
             {
                 "access": str(refresh.access_token),

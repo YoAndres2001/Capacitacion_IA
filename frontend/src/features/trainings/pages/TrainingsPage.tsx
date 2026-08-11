@@ -172,9 +172,9 @@ export default function TrainingsPage() {
       ) : (
         <Grid container spacing={2.5}>
           {items.map((training) => (
-            <Grid size={{ xs: 12, md: 6, xl: 4 }} key={training.id}>
+            <Grid size={{ xs: 12, sm: 6, lg: 4, xl: 3 }} key={training.id}>
               <Card sx={{ height: '100%' }}>
-                <CardContent sx={{ p: 2.5, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 }, display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <Stack direction="row" justifyContent="space-between" sx={{ mb: 1 }}>
                     <Chip label={training.project_name} size="small" variant="outlined" />
                     <StatusChip status={training.status} />
@@ -284,7 +284,7 @@ export default function TrainingsPage() {
                 {...form.register('title')}
               />
               <TextField label="Descripción" multiline rows={3} {...form.register('description')} />
-              <Stack direction="row" spacing={2}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField select label="Nivel" defaultValue="BEGINNER" {...form.register('level')}>
                   <MenuItem value="BEGINNER">Principiante</MenuItem>
                   <MenuItem value="INTERMEDIATE">Intermedio</MenuItem>

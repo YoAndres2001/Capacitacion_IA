@@ -3,7 +3,7 @@ DC_PROD := docker compose -f docker-compose.prod.yml
 BE      := $(DC) exec backend
 
 .DEFAULT_GOAL := help
-.PHONY: help up down restart build logs ps migrate makemigrations seed superuser shell dbshell test lint format prod-up prod-down clean pull-models
+.PHONY: help up down restart build logs ps migrate makemigrations seed superuser shell dbshell test lint format prod-up prod-down clean ai-check rebuild-indices
 
 help:  ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -42,7 +42,7 @@ shell:  ## Shell de Django
 	$(BE) python manage.py shell_plus || $(BE) python manage.py shell
 
 dbshell:  ## Consola de PostgreSQL
-	$(DC) exec postgres psql -U capacita -d capacita
+	$(DC) exec postgres psql -U nexora -d nexora
 
 test:  ## Ejecuta los tests
 	$(BE) pytest -v
@@ -57,9 +57,11 @@ format:  ## Formatea el código
 	$(BE) black src config
 	$(DC) exec frontend npm run format
 
-pull-models:  ## Descarga los modelos gratuitos de Ollama
-	$(DC) exec ollama ollama pull qwen2.5:1.5b-instruct
-	$(DC) exec ollama ollama pull nomic-embed-text
+ai-check:  ## Diagnostica Groq (LLM) y los embeddings locales
+	$(BE) python manage.py ai_bench
+
+rebuild-indices:  ## Reconstruye los índices FAISS tras cambiar EMBEDDING_MODEL
+	$(DC) exec celery-ai python manage.py rebuild_indices
 
 prod-up:  ## Levanta el entorno de producción
 	$(DC_PROD) up -d --build

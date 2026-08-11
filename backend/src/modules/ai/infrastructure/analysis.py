@@ -100,7 +100,7 @@ class MaterialAnalyzer:
             return self._analyze_compact(material, content)
 
         failures = 0
-        failures += 0 if self._chapters(material, content, is_video) else 1
+        failures += 0 if self._chapters(material, content, is_video, blocks) else 1
         failures += 0 if self._summary(material, content) else 1
         failures += 0 if self._concepts(material, content) else 1
         failures += 0 if self._faqs(material, content) else 1
@@ -168,7 +168,7 @@ class MaterialAnalyzer:
         return not (parsed.summary or parsed.concepts or parsed.faqs)
 
     # ── Cadenas ──────────────────────────────────────────────
-    def _chapters(self, material, content: str, is_video: bool) -> bool:
+    def _chapters(self, material, content: str, is_video: bool, blocks: list[SourceBlock]) -> bool:
         from .models import Chapter
 
         parsed = self._json_chain(
@@ -180,6 +180,10 @@ class MaterialAnalyzer:
         )
         if parsed is None:
             return False
+
+        chapters = parsed.chapters
+        if is_video:
+            chapters = ground_chapter_times(chapters, blocks)
 
         Chapter.objects.filter(material=material).delete()
         Chapter.objects.bulk_create(
@@ -194,7 +198,7 @@ class MaterialAnalyzer:
                     start_page=chapter.start_page,
                     end_page=chapter.end_page,
                 )
-                for index, chapter in enumerate(parsed.chapters)
+                for index, chapter in enumerate(chapters)
             ]
         )
         self._link_chunks_to_chapters(material)
@@ -350,6 +354,57 @@ class MaterialAnalyzer:
                 Chunk.objects.filter(id=chunk.id).update(chapter=match)
 
 
+def ground_chapter_times(chapters: list[ChapterOut], blocks: list[SourceBlock]) -> list[ChapterOut]:
+    """
+    Ancla los capítulos de un video a segmentos REALES de la transcripción.
+
+    El prompt le muestra al modelo el contenido con marcas `[mm:ss]`, pero el
+    modelo redondea, interpola y a veces inventa: un capítulo en el minuto 47 de
+    un video de 30 haría que el reproductor saltara al vacío, y un `0:00` para
+    todos los capítulos anula la navegación. Como los timestamps son la promesa
+    central del producto ("esto está en el minuto 12:43"), no se aceptan tal
+    cual.
+
+    Cada `start` se desplaza al inicio de segmento real más cercano y cada `end`
+    al fin de segmento real más cercano; los capítulos sin `start` utilizable se
+    descartan. Si la transcripción no trae tiempos, se devuelve la lista intacta.
+    """
+    starts = sorted({b.start_time for b in blocks if b.start_time is not None})
+    ends = sorted({b.end_time for b in blocks if b.end_time is not None})
+    if not starts:
+        return chapters
+
+    grounded: list[ChapterOut] = []
+    for chapter in chapters:
+        if chapter.start is None:
+            continue
+        start = _nearest(starts, chapter.start)
+        end = _nearest(ends, chapter.end) if chapter.end is not None and ends else None
+        # Un capítulo que "termina" antes de empezar es ruido del modelo: se
+        # deja sin fin en vez de guardar un rango imposible.
+        if end is not None and end <= start:
+            end = None
+        grounded.append(chapter.model_copy(update={"start": start, "end": end}))
+
+    if not grounded:
+        logger.warning("El modelo no produjo capítulos con tiempos utilizables")
+        return []
+
+    # Dos capítulos que caen en el mismo segmento son el mismo capítulo.
+    unique: list[ChapterOut] = []
+    seen: set[float] = set()
+    for chapter in sorted(grounded, key=lambda c: c.start or 0.0):
+        if chapter.start in seen:
+            continue
+        seen.add(chapter.start)
+        unique.append(chapter)
+    return unique
+
+
+def _nearest(values: list[float], target: float) -> float:
+    return min(values, key=lambda value: abs(value - target))
+
+
 def _coerce(raw: Any, schema: type[BaseModel]) -> Any:
     """
     Adapta salidas casi correctas.
@@ -373,6 +428,7 @@ def compress(blocks: list[SourceBlock], *, is_video: bool, limit: int | None = N
     Para materiales largos se muestrea uniformemente en lugar de truncar: así el
     análisis cubre el principio, el medio y el final del contenido.
     """
+
     def render(block: SourceBlock) -> str:
         if is_video and block.start_time is not None:
             return f"[{_mmss(block.start_time)}] {block.text.strip()}"

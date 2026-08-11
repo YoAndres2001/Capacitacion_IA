@@ -121,12 +121,14 @@ POST /api/v1/auth/login
 | DELETE | `/materials/{id}` | Borrado lógico + limpieza de chunks |
 | POST | `/materials/{id}/reprocess` | Reencola la ingesta |
 | GET | `/materials/{id}/status` | `{status, step, progress, error_code}` |
-| GET | `/materials/{id}/stream` | URL firmada / `X-Accel-Redirect` del video |
+| GET | `/materials/{id}/stream` | URL firmada del archivo (video, audio o documento) |
+| GET | `/materials/{id}/content` | Texto del documento en bloques `{order, page, heading, text}` para leerlo en el reproductor; 400 si es audiovisual |
 | GET | `/materials/{id}/transcript` | Transcripción con segmentos |
 | GET | `/materials/{id}/chapters` | Capítulos detectados |
 | PATCH | `/chapters/{id}` | Corrección manual del título/resumen |
 | GET | `/materials/{id}/concepts` · `/faqs` · `/summary` | Salidas del análisis IA |
 | GET | `/materials/{id}/chunks` | Diagnóstico (ADMIN) |
+| GET | `/media/{token}` | Archivo protegido por firma temporal. El token incluye la ruta relativa, así que la ruta lo captura con `path:`. Se entrega `inline` y con `Accept-Ranges: bytes` (en desarrollo Django atiende `Range`; en producción lo hace nginx vía `X-Accel-Redirect`), y con `X-Frame-Options: SAMEORIGIN` para que el visor de PDF pueda mostrarlo en un iframe |
 
 ```http
 POST /api/v1/lessons/8f3.../materials/upload-session
@@ -227,6 +229,25 @@ POST /api/v1/trainings/5d2.../exams/generate
 | GET | `/analytics/exam-results` | Distribución de notas, preguntas más falladas |
 | GET | `/analytics/ai-usage` | Tokens, costo, tasa de "sin contexto" |
 | GET | `/analytics/export` | `?report=progress&format=csv` |
+| GET | `/analytics/me` | Estadísticas personales del estudiante |
+| GET | `/analytics/me/activity` | `?days=7` · serie diaria de tiempo de estudio y detalle por curso (vista «Progreso») |
+
+```json
+GET /analytics/me/activity?days=7
+{
+  "range": {"start":"2026-08-01","end":"2026-08-07","days":7},
+  "daily": [{"date":"2026-08-01","seconds":0,"lessons":0}],
+  "totals": {"seconds":1800,"lessons":2,"trainings":1},
+  "trainings": [
+    {"training_id":"5a2...","title":"Inventario — Nivel Básico","project_name":"ERP",
+     "status":"IN_PROGRESS","progress":40.0,"seconds":1800,
+     "lessons_viewed":2,"lessons_completed":1,"last_viewed_at":"2026-08-06T15:57:56Z"}
+  ]
+}
+```
+
+El tiempo se atribuye al día de `LessonProgress.last_viewed_at` (la marca que
+guarda el reproductor), no a una bitácora por sesión.
 
 ## 11. WebSocket (contenedor independiente)
 

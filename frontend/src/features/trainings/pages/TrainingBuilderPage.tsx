@@ -10,6 +10,7 @@ import {
   Publish,
   Quiz,
   Unpublished,
+  Visibility,
 } from '@mui/icons-material';
 import {
   Accordion,
@@ -152,6 +153,15 @@ export default function TrainingBuilderPage() {
         actions={
           <>
             <StatusChip status={data.status} />
+            {/* Revisar el curso con los ojos del estudiante antes de publicarlo:
+                mismo reproductor, sin registrar progreso. */}
+            <Button
+              variant="outlined"
+              startIcon={<Visibility />}
+              onClick={() => navigate(`/cursos/${trainingId}`)}
+            >
+              Vista previa
+            </Button>
             {data.status === 'DRAFT' ? (
               <Tooltip
                 title={
@@ -244,7 +254,13 @@ export default function TrainingBuilderPage() {
 
       {tab === 'exams' && (
         <Box>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            justifyContent="space-between"
+            alignItems={{ xs: 'stretch', sm: 'center' }}
+            spacing={1.5}
+            sx={{ mb: 2 }}
+          >
             <Typography variant="body2" color="text.secondary">
               La IA genera el examen en borrador; tú lo revisas y lo publicas.
             </Typography>
@@ -253,6 +269,7 @@ export default function TrainingBuilderPage() {
               startIcon={<AutoAwesome />}
               disabled={generation !== null && !generation.failed}
               onClick={() => setGeneratorOpen(true)}
+              sx={{ flexShrink: 0 }}
             >
               Generar con IA
             </Button>
@@ -300,7 +317,13 @@ export default function TrainingBuilderPage() {
                           {exam.passing_score}% · {exam.max_attempts} intentos
                         </Typography>
                       </Box>
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        alignItems="center"
+                        flexWrap="wrap"
+                        useFlexGap
+                      >
                         <StatusChip status={exam.status} />
                         <Button
                           size="small"

@@ -1,7 +1,7 @@
 # 01 · Análisis Funcional
 
 **Producto:** Plataforma de Capacitaciones con IA (clon funcional de Plazzi + capa de Inteligencia Artificial)
-**Nombre interno:** `Capacita IA`
+**Nombre interno:** `Nexora`
 **Versión del documento:** 1.0
 
 ---
@@ -102,9 +102,9 @@ automáticamente, y un tutor virtual que adapta la explicación al nivel del usu
 ```
 Upload → Validación (MIME/tamaño/antivirus) → Cola Celery
    ↓
-[VIDEO]  ffmpeg extrae audio (wav 16kHz mono)
+[VIDEO]  ffmpeg extrae audio (FLAC 16kHz mono) y lo trocea si excede el tope de subida
    ↓
-Whisper (faster-whisper) → transcripción con timestamps por segmento
+Groq Whisper (API) → transcripción con timestamps por segmento (globales, no por trozo)
    ↓
 [DOCUMENTO] PyMuPDF / python-docx / python-pptx → texto + metadatos de página
    ↓
@@ -144,7 +144,7 @@ Estado AVAILABLE + notificación WebSocket
 
 ## 8. Alcance del MVP
 
-**Incluido:** M1–M7 completos con IA (Ollama local gratuito por defecto, OpenAI opcional),
+**Incluido:** M1–M7 completos con IA (Groq como único proveedor externo; embeddings locales),
 Docker Compose dev/prod, WebSocket en contenedor independiente, Swagger.
 
 **Excluido (post-MVP):** certificados PDF, gamificación, SCORM/xAPI, app móvil nativa,

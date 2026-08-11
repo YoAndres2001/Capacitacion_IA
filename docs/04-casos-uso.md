@@ -13,7 +13,7 @@ graph LR
         CW{{Celery Worker}}
     end
 
-    subgraph "Sistema · Capacita IA"
+    subgraph "Sistema · Nexora"
         UC01[CU-01 Autenticarse]
         UC02[CU-02 Recuperar contraseña]
         UC03[CU-03 Gestionar empresas]

@@ -11,8 +11,8 @@ import type { ApiError } from './types';
 
 const API_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
 
-const ACCESS_KEY = 'capacita.access';
-const REFRESH_KEY = 'capacita.refresh';
+const ACCESS_KEY = 'nexora.access';
+const REFRESH_KEY = 'nexora.refresh';
 
 export const tokenStorage = {
   get access() {

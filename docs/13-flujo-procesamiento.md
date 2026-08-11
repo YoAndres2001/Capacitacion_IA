@@ -10,8 +10,8 @@ flowchart TD
     C --> D[Estado PROCESSING · WebSocket]
     D --> E{Tipo}
     E -->|VIDEO| V1[ffmpeg: metadatos + miniatura]
-    V1 --> V2[ffmpeg: audio WAV 16 kHz mono]
-    V2 --> V3[faster-whisper: transcripción<br/>segmentos con start/end]
+    V1 --> V2[ffmpeg: audio FLAC 16 kHz mono<br/>+ troceo si supera el tope de subida]
+    V2 --> V3[Groq Whisper: transcripción<br/>segmentos con start/end globales]
     E -->|PDF| D1[PyMuPDF: texto por página + OCR si escaneado]
     E -->|DOCX| D2[python-docx: párrafos, tablas, títulos]
     E -->|PPTX| D3[python-pptx: diapositivas + notas]
@@ -53,21 +53,52 @@ flowchart TD
 ```bash
 ffprobe -v error -show_format -show_streams          # duración, códecs, resolución
 ffmpeg -i input.mp4 -ss 00:00:03 -vframes 1 thumb.jpg
-ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le audio.wav
+ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a flac audio.flac
 ```
 
-**Transcripción (`faster-whisper`, gratuito y local)**
-```python
-model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
-segments, info = model.transcribe(
-    "audio.wav", language=None, vad_filter=True,
-    vad_parameters={"min_silence_duration_ms": 500}, beam_size=5, word_timestamps=False,
-)
-```
-Salida: `[{index, start, end, text}]` + `language` + `confidence`.
-El filtro VAD elimina silencios → menos tiempo de cómputo y menos alucinación de Whisper.
+16 kHz mono es la frecuencia a la que Whisper trabaja internamente, así que la conversión no
+pierde información; FLAC es sin pérdida y pesa alrededor de la mitad que el WAV equivalente,
+lo que importa porque el archivo viaja por red hasta Groq.
 
-Para audios largos, la transcripción se reporta por progreso (`processing_jobs.progress`) cada N segmentos.
+**Transcripción (API Speech-to-Text de Groq)**
+
+```
+POST {GROQ_BASE_URL}/audio/transcriptions
+  file=audio.flac
+  model={GROQ_WHISPER_MODEL}          # whisper-large-v3
+  response_format=verbose_json
+  timestamp_granularities[]=segment
+```
+
+Salida: `{"text": ..., "segments": [{"start", "end", "text"}], "language", "duration"}`.
+
+**Audios que no caben en una petición.** El tope de subida son 24 MB (nivel gratuito de Groq
+con margen para las cabeceras multipart). Por encima de eso:
+
+1. `ffmpeg -f segment -segment_time 600 -c:a flac` parte el audio en trozos de 10 minutos
+   (recodificando, no copiando: el copiado directo puede dejar cabeceras FLAC incompletas).
+2. Cada trozo se envía por separado, con reintentos y respeto del 429.
+3. A los timestamps de cada trozo se les **suma su desplazamiento**, calculado con la duración
+   real de las partes anteriores (`ffprobe`) y no con el valor nominal, que iría acumulando
+   error de décimas hasta desplazar las citas varios segundos en un video largo.
+4. Los índices de segmento se renumeran de forma global: cada trozo los devuelve desde 0.
+5. El idioma detectado en el primer trozo se reenvía **traducido a código ISO** en los
+   siguientes: Groq lo devuelve por su nombre (`"Spanish"`) pero su parámetro `language`
+   solo acepta el código (`"es"`), y reenviarlo tal cual devuelve 400.
+
+Es el punto más delicado del pipeline: si se perdiera el desplazamiento, el chat citaría el
+minuto equivocado sin dar ningún error. Está cubierto por
+`src/tests/unit/test_groq_transcriber.py` y por el test de integración del pipeline de video.
+
+**Verificado contra la API real** con un video de 93 s, comparando la transcripción en una
+sola petición contra la misma troceada en cuatro: el final coincide (92,00 s frente a
+92,04 s), es decir, no hay deriva acumulada. El troceo sí parte alguna frase en el límite
+del corte (20 segmentos en vez de 17); el texto no se pierde y el chunking posterior vuelve
+a agruparlo, así que no se añade solapamiento entre trozos por un artefacto que solo afecta
+a audios de más de 24 MB.
+
+Para audios largos, la transcripción se reporta por progreso (`processing_jobs.progress`) al
+terminar cada trozo.
 
 **Documentos**
 
@@ -154,7 +185,7 @@ pipeline funciona incluso con modelos locales de ventana modesta (8k tokens).
 | Idempotencia | Cada etapa comprueba si su salida ya existe (transcripción, chunks, embeddings) y la omite |
 | Reintentos | `autoretry_for=(TransientError,)`, `retry_backoff=True`, `max_retries=3` |
 | Reproceso | `POST /materials/{id}/reprocess` borra las salidas derivadas y reencola desde cero |
-| Limpieza | Los temporales (`audio.wav`, trozos) se eliminan en `finally` |
+| Limpieza | Los temporales (`audio.flac`, trozos) se eliminan en `finally` |
 | Trazabilidad | `processing_jobs` guarda paso, progreso, tiempos y error de cada ejecución |
 
 ## 4. Códigos de error del pipeline
@@ -168,31 +199,32 @@ pipeline funciona incluso con modelos locales de ventana modesta (8k tokens).
 | `TRANSCRIPTION_FAILED` | Fallo de Whisper | Reintentar o usar un modelo menor |
 | `EXTRACTION_FAILED` | Documento corrupto o protegido | Quitar la protección |
 | `EMPTY_CONTENT` | No se obtuvo texto (PDF escaneado sin OCR) | Habilitar OCR |
-| `EMBEDDING_PROVIDER_UNAVAILABLE` | Ollama/OpenAI caído | Reintentar; el material queda reprocesable |
+| `EMBEDDING_PROVIDER_UNAVAILABLE` | No se pudo cargar el modelo local de embeddings | Revisar `EMBEDDING_MODEL` y el volumen de caché; el material queda reprocesable |
 | `LLM_ANALYSIS_FAILED` | Fallo en las cadenas de análisis | El material queda `AVAILABLE` con `partial_analysis` |
 | `INDEX_WRITE_FAILED` | Error de IO en el volumen de índices | Revisar disco/permisos |
 
 ## 5. Rendimiento estimado
 
-| Escenario | Hardware | Tiempo aprox. |
-|-----------|----------|---------------|
-| Video 60 min, Whisper `small`, CPU 8 núcleos | Sin GPU | 20–35 min |
-| Video 60 min, Whisper `small`, GPU | RTX 3060 | 3–6 min |
-| Embeddings de 400 chunks con `nomic-embed-text` en CPU | — | 1–3 min |
-| Análisis LLM (4 cadenas) con `qwen2.5:1.5b` en CPU | 4 núcleos | 2–6 min |
-| Análisis LLM (4 cadenas) con `qwen2.5:7b` | GPU | < 1 min |
-| Análisis LLM (4 cadenas) con `qwen2.5:7b` en CPU | 4 núcleos | **inviable** (supera `OLLAMA_TIMEOUT`) |
-| PDF de 200 páginas | CPU | 1–2 min + embeddings |
+| Escenario | Dónde corre | Tiempo aprox. |
+|-----------|-------------|---------------|
+| Video 60 min · extracción y troceo de audio (ffmpeg) | CPU local | 1–3 min |
+| Video 60 min · transcripción con Groq Whisper (6 trozos) | Groq | 1–3 min |
+| Embeddings de 400 chunks con `MiniLM-L12` en CPU | CPU local | 30–90 s |
+| Análisis LLM (4 cadenas) con `llama-3.3-70b-versatile` | Groq | 20–60 s |
+| Análisis LLM en el nivel gratuito, tocando el límite de 12k tokens/min | Groq | 2–5 min (con esperas de 429) |
+| PDF de 200 páginas | CPU local | 1–2 min + embeddings |
 
-> **Elección del modelo.** La etapa de análisis es la única que exige un LLM potente. Si el
-> modelo no alcanza a responder dentro de `OLLAMA_TIMEOUT`, el material igual queda
-> `AVAILABLE` con `partial_analysis = true`: el chat RAG funciona porque los embeddings ya
-> están. Es una degradación deliberada, no un fallo silencioso — el log indica exactamente
-> qué bajar (`OLLAMA_LLM_MODEL` o `AI_ANALYSIS_MAX_CHARS`).
+> **El cuello de botella ya no es la CPU, sino la cuota.** Si las cadenas de análisis agotan
+> el cupo por minuto y los reintentos no alcanzan, el material igual queda `AVAILABLE` con
+> `partial_analysis = true`: el chat RAG funciona porque los embeddings son locales y no
+> dependen de Groq. Es una degradación deliberada, no un fallo silencioso — el log indica
+> exactamente qué bajar (`AI_ANALYSIS_MAX_CHARS`, `LLM_MAX_TOKENS` o `AI_EXAM_BATCH_SIZE`).
 
-**Optimizaciones aplicadas:** VAD antes de transcribir, lotes de embeddings, cadenas LLM en paralelo
-donde no hay dependencia, cola `ingest` separada con concurrencia baja (`--concurrency=2`) para no
-saturar CPU, y reutilización del modelo Whisper cargado en memoria del worker.
+**Optimizaciones aplicadas:** troceo del audio solo cuando excede el tope de subida, lotes de
+embeddings, cola `ingest` separada con concurrencia baja (`--concurrency=2`) para no saturar
+CPU, modelo de embeddings cargado una vez por proceso worker y compartido en un volumen entre
+contenedores, y análisis en una sola llamada cuando el material es corto
+(`AI_COMPACT_ANALYSIS_CHARS`).
 
 ## 6. Diagrama de secuencia completo (documento PDF)
 
@@ -202,7 +234,7 @@ sequenceDiagram
     participant FE as Frontend
     participant API as backend
     participant CE as celery-ingest
-    participant AI as celery-ai / Ollama
+    participant AI as celery-ai / Groq
     participant DB as PostgreSQL
     participant FS as FAISS
     participant WS as websocket
