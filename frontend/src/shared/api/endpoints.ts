@@ -44,6 +44,9 @@ export const endpoints = {
     chatSessions: (id: string) => `/trainings/${id}/chat-sessions`,
     agentRun: (id: string) => `/trainings/${id}/agent/run`,
   },
+  enrollments: {
+    detail: (id: string) => `/enrollments/${id}`,
+  },
   modules: {
     detail: (id: string) => `/modules/${id}/`,
     lessons: (id: string) => `/modules/${id}/lessons/`,

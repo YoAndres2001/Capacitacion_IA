@@ -34,6 +34,7 @@ from src.shared.domain.exceptions import (
 )
 from src.shared.presentation.permissions import IsInstructor, IsInstructorOrReadOnly
 
+from ..application.use_cases.discard_material import discard_materials
 from ..application.use_cases.upload_material import (
     UploadMaterialInput,
     UploadMaterialUseCase,
@@ -47,7 +48,6 @@ from ..infrastructure.models import (
     Material,
     Module,
     Note,
-    ProcessingJob,
     Training,
     UploadSession,
 )
@@ -122,13 +122,37 @@ class TrainingViewSet(viewsets.ModelViewSet):
             changes={"title": training.title},
         )
 
+    def perform_destroy(self, instance):
+        """
+        La capacitación se borra lógicamente, pero eso no arrastra su material:
+        hay que retirarlo a mano o el proyecto seguiría teniéndolo por cargado.
+        """
+        discard_materials(Material.objects.filter(lesson__module__training=instance))
+        instance.delete()
+
+        AuditLog.objects.create(
+            company_id=self.request.user.company_id,
+            user=self.request.user,
+            action=AuditLog.Action.CONTENT_DELETED,
+            entity_type="Training",
+            entity_id=instance.id,
+            changes={"title": instance.title},
+        )
+
     @extend_schema(tags=["Capacitaciones"], summary="Árbol completo de contenido")
     @action(detail=True, methods=["get"], url_path="detail")
     def tree(self, request, pk=None):
         training = self.get_object()
+        # Sin las anotaciones, DRF omite los `*_count` del serializer (SkipField)
+        # y el detalle saldría sin ellos, a diferencia del listado.
         full = (
             Training.objects.filter(pk=training.pk)
             .prefetch_related("modules__lessons__materials")
+            .annotate(
+                module_count=Count("modules", distinct=True),
+                lesson_count=Count("modules__lessons", distinct=True),
+                enrollment_count=Count("enrollments", distinct=True),
+            )
             .first()
         )
         return Response(TrainingDetailSerializer(full).data)
@@ -303,6 +327,12 @@ class ModuleViewSet(
             training__project__company_id=self.request.user.company_id
         ).prefetch_related("lessons__materials")
 
+    def perform_destroy(self, instance):
+        # El borrado sí es físico y arrastra lecciones y materiales por FK, pero
+        # el índice FAISS es un derivado aparte: hay que marcarlo para reconstruir.
+        discard_materials(Material.objects.filter(lesson__module=instance))
+        instance.delete()
+
     @extend_schema(tags=["Capacitaciones"], summary="Listar/crear lecciones del módulo")
     @action(detail=True, methods=["get", "post"])
     def lessons(self, request, pk=None):
@@ -354,6 +384,11 @@ class LessonViewSet(
         return Lesson.objects.filter(
             module__training__project__company_id=self.request.user.company_id
         ).select_related("module__training__project").prefetch_related("materials")
+
+    def perform_destroy(self, instance):
+        # Igual que en el módulo: el material cae por FK, el índice no.
+        discard_materials(Material.objects.filter(lesson=instance))
+        instance.delete()
 
     # ── Progreso (RF-032, RF-033) ────────────────────────────
     @extend_schema(
@@ -665,16 +700,7 @@ class MaterialViewSet(
 
     def perform_destroy(self, instance):
         """CU-17: cancela el procesamiento, borra lógicamente y limpia los chunks."""
-        from src.modules.ai.infrastructure.models import Chunk
-        from src.modules.projects.infrastructure.models import VectorCollection
-
-        self._cancel_running_ingestion(instance)
-
-        Chunk.objects.filter(material=instance).delete()
-        VectorCollection.objects.filter(project_id=instance.project_id).update(
-            status=VectorCollection.Status.PENDING
-        )
-        instance.delete()
+        discard_materials([instance])
 
         AuditLog.objects.create(
             company_id=self.request.user.company_id,
@@ -683,29 +709,6 @@ class MaterialViewSet(
             entity_type="Material",
             entity_id=instance.id,
         )
-
-    @staticmethod
-    def _cancel_running_ingestion(material) -> None:
-        """
-        Revoca la tarea de ingesta en curso.
-
-        Un worker puede estar transcribiendo un video de una hora: dejarlo
-        correr tras el borrado desperdicia el slot y retrasa las subidas
-        siguientes. La tarea además comprueba por su cuenta si el material
-        desapareció, así que la revocación es la vía rápida, no la única.
-        """
-        from config.celery import app as celery_app
-
-        running = material.processing_jobs.filter(
-            status=ProcessingJob.Status.RUNNING
-        ).exclude(celery_task_id="")
-
-        for job in running:
-            try:
-                celery_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
-            except Exception:  # pragma: no cover - el broker puede no responder
-                pass
-            job.finish(success=False, error="Cancelada: el material fue eliminado.")
 
     @extend_schema(tags=["Materiales"], summary="Estado de procesamiento")
     @action(detail=True, methods=["get"])

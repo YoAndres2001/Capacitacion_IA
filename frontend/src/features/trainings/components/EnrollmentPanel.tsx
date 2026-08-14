@@ -1,12 +1,13 @@
 /** Asignación de la capacitación a usuarios y seguimiento de su avance. */
 
-import { PersonAdd } from '@mui/icons-material';
+import { Delete, PersonAdd } from '@mui/icons-material';
 import {
   Autocomplete,
   Box,
   Button,
   Card,
   CardContent,
+  IconButton,
   Stack,
   Table,
   TableBody,
@@ -21,7 +22,7 @@ import { useState } from 'react';
 import { api, errorMessage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
 import type { Enrollment, Paginated, User } from '@/shared/api/types';
-import { Loading, ProgressBar, StatusChip } from '@/shared/components';
+import { ConfirmDialog, Loading, ProgressBar, StatusChip } from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 import { formatDate, progressValue } from '@/shared/utils/format';
 
@@ -29,6 +30,7 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
   const queryClient = useQueryClient();
   const snackbar = useSnackbar();
   const [selected, setSelected] = useState<User[]>([]);
+  const [toRemove, setToRemove] = useState<Enrollment | null>(null);
 
   const enrollments = useQuery({
     queryKey: ['training', trainingId, 'enrollments'],
@@ -50,6 +52,16 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
       await queryClient.invalidateQueries({ queryKey: ['training', trainingId, 'enrollments'] });
       setSelected([]);
       snackbar.success(`${data.assigned_count} usuario(s) asignado(s).`);
+    },
+    onError: (error) => snackbar.error(errorMessage(error)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (enrollmentId: string) => api.delete(endpoints.enrollments.detail(enrollmentId)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['training', trainingId, 'enrollments'] });
+      setToRemove(null);
+      snackbar.success('Participante quitado de la capacitación.');
     },
     onError: (error) => snackbar.error(errorMessage(error)),
   });
@@ -116,6 +128,7 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
                     <TableCell sx={{ minWidth: 180 }}>Avance</TableCell>
                     <TableCell>Asignado</TableCell>
                     <TableCell>Completado</TableCell>
+                    <TableCell align="right">Acciones</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -141,6 +154,16 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
                       </TableCell>
                       <TableCell>{formatDate(enrollment.assigned_at)}</TableCell>
                       <TableCell>{formatDate(enrollment.completed_at)}</TableCell>
+                      <TableCell align="right">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          aria-label={`Quitar a ${enrollment.user.full_name}`}
+                          onClick={() => setToRemove(enrollment)}
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -149,6 +172,17 @@ export function EnrollmentPanel({ trainingId }: { trainingId: string }) {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={toRemove !== null}
+        title="Quitar participante"
+        message={`Se quitará a ${toRemove?.user.full_name ?? ''} de esta capacitación junto con su avance registrado. Esta acción no se puede deshacer.`}
+        confirmLabel="Quitar"
+        destructive
+        loading={remove.isPending}
+        onConfirm={() => toRemove && remove.mutate(toRemove.id)}
+        onCancel={() => setToRemove(null)}
+      />
     </Stack>
   );
 }

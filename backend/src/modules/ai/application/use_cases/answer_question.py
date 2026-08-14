@@ -85,17 +85,40 @@ class AnswerQuestionUseCase(UseCase[AnswerInput, AnswerOutput]):
         retriever = self._retriever_factory(training.project_id)
         search_query = self._rewrite(data.question, history)
 
-        chunks = retriever.retrieve(
-            search_query,
-            training_id=None if training.cross_material_search else training.id,
-            project_id=training.project_id,
-        )
+        def search(query: str):
+            return retriever.retrieve(
+                query,
+                training_id=None if training.cross_material_search else training.id,
+                project_id=training.project_id,
+            )
+
+        chunks = search(search_query)
 
         policy = GroundingPolicy(
             min_score=settings.RAG_SETTINGS["MIN_SCORE"],
             min_top_score=settings.RAG_SETTINGS["MIN_TOP_SCORE"],
         )
         decision = policy.evaluate(chunks)
+
+        # Segunda oportunidad para las preguntas que hablan del curso en vez de
+        # su contenido («¿de qué trata?», «dame un ejemplo»): no comparten
+        # vocabulario con ningún fragmento y se quedaban bajo el umbral, aunque
+        # el material sí las responda. Se reescriben con el temario a la vista.
+        # Solo se paga la llamada al LLM cuando la búsqueda directa ya falló, y
+        # el prompt deja intactas las preguntas ajenas al temario, que siguen
+        # recibiendo la respuesta honesta (RN-04).
+        if not decision.is_grounded:
+            grounded_query = self._rewrite_with_syllabus(data.question, training)
+            if grounded_query and grounded_query != search_query:
+                retry = search(grounded_query)
+                retry_decision = policy.evaluate(retry)
+                logger.info(
+                    f"Reintento con el temario: grounded={retry_decision.is_grounded} "
+                    f"scores={[round(c.score, 3) for c in retry]} query={grounded_query[:160]!r}",
+                    extra={"training_id": str(training.id)},
+                )
+                if retry_decision.is_grounded:
+                    chunks, decision = retry, retry_decision
 
         # ── Sin contexto: respuesta honesta, sin llamar al LLM ──
         if not decision.is_grounded:
@@ -262,17 +285,82 @@ class AnswerQuestionUseCase(UseCase[AnswerInput, AnswerOutput]):
         except Exception:
             return question
 
+    def _rewrite_with_syllabus(self, question: str, training) -> str:
+        """
+        Convierte una pregunta sobre el curso en una consulta con sus términos.
+
+        El temario se arma con los capítulos y conceptos ya extraídos por la IA;
+        si el material aún no los tiene, bastan los nombres de archivo.
+        """
+        from ...infrastructure.rag import prompts
+
+        syllabus = self._syllabus(training)
+        if not syllabus:
+            return ""
+
+        try:
+            response = self._llm.generate(
+                [
+                    ChatMessage(
+                        role="user",
+                        content=prompts.QUERY_GROUNDING_REWRITE.format(
+                            title=training.title, syllabus=syllabus, question=question
+                        ),
+                    )
+                ],
+                temperature=0.0,
+                max_tokens=120,
+            )
+            return response.content.strip().strip('"')
+        except Exception:
+            logger.warning("No se pudo reescribir la consulta con el temario", exc_info=True)
+            return ""
+
+    @staticmethod
+    def _syllabus(training, limit: int = 14) -> str:
+        from src.modules.trainings.infrastructure.models import Material
+
+        from ...infrastructure.models import Chapter, Concept
+
+        materials = Material.objects.filter(lesson__module__training=training)
+        terms = list(
+            Chapter.objects.filter(material__in=materials).values_list("title", flat=True)[:limit]
+        )
+        terms += list(
+            Concept.objects.filter(material__in=materials).values_list("name", flat=True)[
+                : limit - len(terms)
+            ]
+        )
+        if not terms:
+            terms = [material.original_filename for material in materials[:limit]]
+        return "; ".join(terms)
+
     @staticmethod
     def _recent_history(session, limit: int = 8) -> list[tuple[str, str]]:
         from ...infrastructure.models import ChatMessage as ChatMessageModel
 
-        rows = (
+        rows = list(
             ChatMessageModel.objects.filter(session=session)
             .exclude(role=ChatMessageModel.Role.SYSTEM)
-            .order_by("-created_at")[: limit + 1]
+            .order_by("-created_at")[: (limit * 2) + 1]
         )
-        # Se descarta la pregunta recién insertada y se restaura el orden natural.
-        return [(row.role, row.content) for row in reversed(list(rows))][:-1]
+        rows.reverse()
+        rows = rows[:-1]  # la pregunta recién insertada aún no tiene respuesta
+
+        # Solo se conservan los intercambios que sí se respondieron. Un turno
+        # con la negativa por falta de contexto no aporta información y el
+        # modelo lo imita: repetía «no encuentro esa información» aunque en
+        # este intento sí hubiera contexto. La pregunta huérfana tampoco sirve.
+        history: list[tuple[str, str]] = []
+        question = None
+        for row in rows:
+            if row.role == ChatMessageModel.Role.USER:
+                question = row
+            else:
+                if question is not None and row.grounded:
+                    history += [(question.role, question.content), (row.role, row.content)]
+                question = None
+        return history[-limit:]
 
     @staticmethod
     def _flag_content_gap(training, data: AnswerInput) -> None:

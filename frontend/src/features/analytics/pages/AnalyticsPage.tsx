@@ -8,7 +8,6 @@ import {
   CardContent,
   Chip,
   LinearProgress,
-  MenuItem,
   Stack,
   Tab,
   Table,
@@ -17,7 +16,6 @@ import {
   TableHead,
   TableRow,
   Tabs,
-  TextField,
   Typography,
 } from '@mui/material';
 import Grid from '@mui/material/Grid2';
@@ -26,7 +24,14 @@ import { useState } from 'react';
 import { api, tokenStorage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
 import type { Paginated, Project } from '@/shared/api/types';
-import { ErrorState, Loading, PageHeader, ProgressBar, StatCard } from '@/shared/components';
+import {
+  ErrorState,
+  Loading,
+  PageHeader,
+  ProgressBar,
+  SearchableSelect,
+  StatCard,
+} from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 import { STATUS_LABEL, formatDate, progressValue } from '@/shared/utils/format';
 
@@ -160,20 +165,19 @@ export default function AnalyticsPage() {
             sx={{ mb: 2 }}
             spacing={2}
           >
-            <TextField
-              select
+            <SearchableSelect
               label="Proyecto"
               value={projectFilter}
-              onChange={(event) => setProjectFilter(event.target.value)}
+              onChange={setProjectFilter}
+              options={(projects.data?.results ?? []).map((project) => ({
+                value: project.id,
+                label: project.name,
+              }))}
+              emptyLabel="Todos"
+              searchPlaceholder="Buscar proyecto…"
+              searchThreshold={2}
               sx={{ maxWidth: { sm: 280 } }}
-            >
-              <MenuItem value="">Todos</MenuItem>
-              {(projects.data?.results ?? []).map((project) => (
-                <MenuItem key={project.id} value={project.id}>
-                  {project.name}
-                </MenuItem>
-              ))}
-            </TextField>
+            />
             <Button startIcon={<Download />} onClick={() => exportCsv('progress')}>
               Exportar CSV
             </Button>

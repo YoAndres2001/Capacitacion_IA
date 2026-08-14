@@ -5,7 +5,9 @@ import {
   ArrowBack,
   AutoAwesome,
   Delete,
+  Edit,
   ExpandMore,
+  MoreVert,
   People,
   Publish,
   Quiz,
@@ -25,9 +27,13 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Divider,
   IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
   Stack,
   Tab,
@@ -41,15 +47,36 @@ import { useCallback, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, errorMessage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
-import type { Exam, Lesson, TrainingDetail, TrainingModule } from '@/shared/api/types';
+import type {
+  Exam,
+  Lesson,
+  TrainingDetail,
+  TrainingLevel,
+  TrainingModule,
+} from '@/shared/api/types';
 import { ConfirmDialog, ErrorState, Loading, PageHeader, StatusChip } from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 import { EnrollmentPanel } from '@/features/trainings/components/EnrollmentPanel';
+import { ExamFormDialog } from '@/features/exams/components/ExamFormDialog';
 import { ExamGenerationCard } from '@/features/exams/components/ExamGenerationCard';
 import { ExamGeneratorDialog } from '@/features/exams/components/ExamGeneratorDialog';
 import { useExamGeneration } from '@/features/exams/hooks/useExamGeneration';
 import { MaterialUploader } from '@/features/trainings/components/MaterialUploader';
 import { formatDurationLong } from '@/shared/utils/format';
+
+type ModuleDialogState = { mode: 'create' } | { mode: 'edit'; module: TrainingModule };
+type LessonDialogState =
+  | { mode: 'create'; moduleId: string }
+  | { mode: 'edit'; lesson: Lesson };
+
+type SaveLessonInput = { moduleId?: string; id?: string; title: string; type: string };
+
+type TrainingValues = {
+  title: string;
+  description: string;
+  level: TrainingLevel;
+  estimated_minutes: number;
+};
 
 export default function TrainingBuilderPage() {
   const { trainingId = '' } = useParams();
@@ -59,9 +86,14 @@ export default function TrainingBuilderPage() {
   const snackbar = useSnackbar();
 
   const tab = params.get('tab') ?? 'content';
-  const [moduleDialog, setModuleDialog] = useState(false);
-  const [lessonDialog, setLessonDialog] = useState<string | null>(null);
+  // Los diálogos de módulo y lección sirven tanto para crear como para editar.
+  const [moduleDialog, setModuleDialog] = useState<ModuleDialogState | null>(null);
+  const [lessonDialog, setLessonDialog] = useState<LessonDialogState | null>(null);
   const [generatorOpen, setGeneratorOpen] = useState(false);
+  const [examDialog, setExamDialog] = useState(false);
+  const [trainingDialog, setTrainingDialog] = useState(false);
+  const [headerMenu, setHeaderMenu] = useState<HTMLElement | null>(null);
+  const [confirmDeleteTraining, setConfirmDeleteTraining] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ kind: 'module' | 'lesson'; id: string } | null>(
     null,
   );
@@ -99,23 +131,61 @@ export default function TrainingBuilderPage() {
     onError: (error) => snackbar.error(errorMessage(error)),
   });
 
-  const createModule = useMutation({
-    mutationFn: (title: string) => api.post(endpoints.trainings.modules(trainingId), { title }),
+  const updateTraining = useMutation({
+    mutationFn: (values: TrainingValues) =>
+      api.patch(endpoints.trainings.detail(trainingId), values),
     onSuccess: async () => {
       await refresh();
-      setModuleDialog(false);
-      snackbar.success('Módulo agregado.');
+      await queryClient.invalidateQueries({ queryKey: ['trainings'] });
+      setTrainingDialog(false);
+      snackbar.success('Capacitación actualizada.');
     },
     onError: (error) => snackbar.error(errorMessage(error)),
   });
 
-  const createLesson = useMutation({
-    mutationFn: ({ moduleId, ...payload }: { moduleId: string; title: string; type: string }) =>
-      api.post(endpoints.modules.lessons(moduleId), payload),
+  const deleteTraining = useMutation({
+    mutationFn: () => api.delete(endpoints.trainings.detail(trainingId)),
     onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['trainings'] });
+      snackbar.info('Capacitación eliminada.');
+      navigate('/capacitaciones');
+    },
+    onError: (error) => snackbar.error(errorMessage(error)),
+  });
+
+  const saveModule = useMutation({
+    mutationFn: ({ id, title }: { id?: string; title: string }) =>
+      id
+        ? api.patch(endpoints.modules.detail(id), { title })
+        : api.post(endpoints.trainings.modules(trainingId), { title }),
+    onSuccess: async (_, { id }) => {
+      await refresh();
+      setModuleDialog(null);
+      snackbar.success(id ? 'Módulo actualizado.' : 'Módulo agregado.');
+    },
+    onError: (error) => snackbar.error(errorMessage(error)),
+  });
+
+  const saveLesson = useMutation({
+    mutationFn: async ({ moduleId, id, title, type }: SaveLessonInput) => {
+      if (!id) {
+        await api.post(endpoints.modules.lessons(moduleId!), { title, type });
+        return;
+      }
+      // LessonViewSet solo acepta multipart/form-data (parser_classes), y hay que
+      // pisar la cabecera JSON del cliente: con ella axios serializaría el
+      // FormData como JSON y el backend respondería 415.
+      const body = new FormData();
+      body.append('title', title);
+      body.append('type', type);
+      await api.patch(endpoints.lessons.detail(id), body, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    },
+    onSuccess: async (_, { id }) => {
       await refresh();
       setLessonDialog(null);
-      snackbar.success('Lección agregada.');
+      snackbar.success(id ? 'Lección actualizada.' : 'Lección agregada.');
     },
     onError: (error) => snackbar.error(errorMessage(error)),
   });
@@ -153,6 +223,9 @@ export default function TrainingBuilderPage() {
         actions={
           <>
             <StatusChip status={data.status} />
+            <Button variant="outlined" startIcon={<Edit />} onClick={() => setTrainingDialog(true)}>
+              Editar
+            </Button>
             {/* Revisar el curso con los ojos del estudiante antes de publicarlo:
                 mismo reproductor, sin registrar progreso. */}
             <Button
@@ -190,9 +263,37 @@ export default function TrainingBuilderPage() {
                 Despublicar
               </Button>
             )}
+            <IconButton
+              aria-label="Más acciones"
+              onClick={(event) => setHeaderMenu(event.currentTarget)}
+            >
+              <MoreVert />
+            </IconButton>
           </>
         }
       />
+
+      <Menu
+        open={headerMenu !== null}
+        anchorEl={headerMenu}
+        onClose={() => setHeaderMenu(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          onClick={() => {
+            setConfirmDeleteTraining(true);
+            setHeaderMenu(null);
+          }}
+        >
+          <ListItemIcon>
+            <Delete fontSize="small" color="error" />
+          </ListItemIcon>
+          <ListItemText slotProps={{ primary: { color: 'error' } }}>
+            Eliminar capacitación
+          </ListItemText>
+        </MenuItem>
+      </Menu>
 
       {data.status === 'DRAFT' && !data.can_be_published && (
         <Alert severity="info" sx={{ mb: 3 }}>
@@ -214,7 +315,7 @@ export default function TrainingBuilderPage() {
       {tab === 'content' && (
         <Box>
           <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }}>
-            <Button startIcon={<Add />} variant="outlined" onClick={() => setModuleDialog(true)}>
+            <Button startIcon={<Add />} variant="outlined" onClick={() => setModuleDialog({ mode: 'create' })}>
               Agregar módulo
             </Button>
           </Stack>
@@ -229,7 +330,7 @@ export default function TrainingBuilderPage() {
                   Estructura la capacitación en módulos y, dentro de cada uno, agrega lecciones con
                   su video o documento.
                 </Typography>
-                <Button variant="contained" startIcon={<Add />} onClick={() => setModuleDialog(true)}>
+                <Button variant="contained" startIcon={<Add />} onClick={() => setModuleDialog({ mode: 'create' })}>
                   Agregar módulo
                 </Button>
               </CardContent>
@@ -241,8 +342,10 @@ export default function TrainingBuilderPage() {
                   key={module.id}
                   module={module}
                   index={index}
-                  onAddLesson={() => setLessonDialog(module.id)}
+                  onAddLesson={() => setLessonDialog({ mode: 'create', moduleId: module.id })}
+                  onEditModule={() => setModuleDialog({ mode: 'edit', module })}
                   onDeleteModule={() => setConfirmDelete({ kind: 'module', id: module.id })}
+                  onEditLesson={(lesson) => setLessonDialog({ mode: 'edit', lesson })}
                   onDeleteLesson={(lessonId) => setConfirmDelete({ kind: 'lesson', id: lessonId })}
                   onChanged={refresh}
                 />
@@ -262,17 +365,25 @@ export default function TrainingBuilderPage() {
             sx={{ mb: 2 }}
           >
             <Typography variant="body2" color="text.secondary">
-              La IA genera el examen en borrador; tú lo revisas y lo publicas.
+              Crea la evaluación tú mismo o deja que la IA la redacte a partir del material.
             </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AutoAwesome />}
-              disabled={generation !== null && !generation.failed}
-              onClick={() => setGeneratorOpen(true)}
-              sx={{ flexShrink: 0 }}
-            >
-              Generar con IA
-            </Button>
+            <Stack direction="row" spacing={1.5} sx={{ flexShrink: 0 }}>
+              <Button
+                variant="outlined"
+                startIcon={<Add />}
+                onClick={() => setExamDialog(true)}
+              >
+                Crear manual
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<AutoAwesome />}
+                disabled={generation !== null && !generation.failed}
+                onClick={() => setGeneratorOpen(true)}
+              >
+                Generar con IA
+              </Button>
+            </Stack>
           </Stack>
 
           {generation && <ExamGenerationCard generation={generation} onDismiss={dismiss} />}
@@ -284,9 +395,13 @@ export default function TrainingBuilderPage() {
                 <Typography variant="h4" gutterBottom>
                   Sin evaluaciones
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Genera un examen automáticamente a partir del material procesado.
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  Crea un examen y escribe tú las preguntas, o genéralo automáticamente a partir
+                  del material procesado.
                 </Typography>
+                <Button variant="contained" startIcon={<Add />} onClick={() => setExamDialog(true)}>
+                  Crear evaluación manual
+                </Button>
               </CardContent>
             </Card>
           ) : (
@@ -354,19 +469,42 @@ export default function TrainingBuilderPage() {
       {tab === 'enrollments' && <EnrollmentPanel trainingId={trainingId} />}
 
       {/* Diálogos */}
+      <TrainingDialog
+        // Remontar al abrir para que los campos partan del dato recién cargado.
+        key={`training-${trainingDialog}`}
+        open={trainingDialog}
+        training={data}
+        onClose={() => setTrainingDialog(false)}
+        onSubmit={(values) => updateTraining.mutate(values)}
+        loading={updateTraining.isPending}
+      />
       <ModuleDialog
-        open={moduleDialog}
-        onClose={() => setModuleDialog(false)}
-        onSubmit={(title) => createModule.mutate(title)}
-        loading={createModule.isPending}
+        key={moduleDialog?.mode === 'edit' ? moduleDialog.module.id : 'new-module'}
+        open={moduleDialog !== null}
+        initialTitle={moduleDialog?.mode === 'edit' ? moduleDialog.module.title : ''}
+        onClose={() => setModuleDialog(null)}
+        onSubmit={(title) =>
+          saveModule.mutate({
+            id: moduleDialog?.mode === 'edit' ? moduleDialog.module.id : undefined,
+            title,
+          })
+        }
+        loading={saveModule.isPending}
       />
       <LessonDialog
+        key={lessonDialog?.mode === 'edit' ? lessonDialog.lesson.id : 'new-lesson'}
         open={lessonDialog !== null}
+        initial={lessonDialog?.mode === 'edit' ? lessonDialog.lesson : null}
         onClose={() => setLessonDialog(null)}
-        onSubmit={(title, type) =>
-          lessonDialog && createLesson.mutate({ moduleId: lessonDialog, title, type })
-        }
-        loading={createLesson.isPending}
+        onSubmit={(title, type) => {
+          if (!lessonDialog) return;
+          saveLesson.mutate(
+            lessonDialog.mode === 'edit'
+              ? { id: lessonDialog.lesson.id, title, type }
+              : { moduleId: lessonDialog.moduleId, title, type },
+          );
+        }}
+        loading={saveLesson.isPending}
       />
       <ExamGeneratorDialog
         open={generatorOpen}
@@ -374,6 +512,15 @@ export default function TrainingBuilderPage() {
         onClose={() => setGeneratorOpen(false)}
         onGenerated={start}
       />
+      {examDialog && (
+        <ExamFormDialog
+          open
+          trainingId={trainingId}
+          onClose={() => setExamDialog(false)}
+          // Sin preguntas no hay nada que revisar: se salta directo al editor.
+          onSaved={(created) => navigate(`/examenes/${created.id}/editor`)}
+        />
+      )}
       <ConfirmDialog
         open={confirmDelete !== null}
         title={confirmDelete?.kind === 'module' ? 'Eliminar módulo' : 'Eliminar lección'}
@@ -384,6 +531,29 @@ export default function TrainingBuilderPage() {
         onConfirm={() => confirmDelete && remove.mutate(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
       />
+      <ConfirmDialog
+        open={confirmDeleteTraining}
+        title="Eliminar capacitación"
+        message={
+          <>
+            <DialogContentText>
+              Se eliminará «{data.title}» con todos sus módulos, lecciones, material y evaluaciones.
+              Esta acción no se puede deshacer.
+            </DialogContentText>
+            {data.enrollment_count > 0 && (
+              <Alert severity="warning" sx={{ mt: 2 }}>
+                Hay {data.enrollment_count} participante(s) asignado(s): también se perderá su avance.
+                Si solo quieres retirarla de circulación, usa <strong>Despublicar</strong>.
+              </Alert>
+            )}
+          </>
+        }
+        confirmLabel="Eliminar"
+        destructive
+        loading={deleteTraining.isPending}
+        onConfirm={() => deleteTraining.mutate()}
+        onCancel={() => setConfirmDeleteTraining(false)}
+      />
     </Box>
   );
 }
@@ -392,14 +562,18 @@ function ModuleAccordion({
   module,
   index,
   onAddLesson,
+  onEditModule,
   onDeleteModule,
+  onEditLesson,
   onDeleteLesson,
   onChanged,
 }: {
   module: TrainingModule;
   index: number;
   onAddLesson: () => void;
+  onEditModule: () => void;
   onDeleteModule: () => void;
+  onEditLesson: (lesson: Lesson) => void;
   onDeleteLesson: (lessonId: string) => void;
   onChanged: () => void;
 }) {
@@ -414,6 +588,17 @@ function ModuleAccordion({
           <Typography variant="caption" color="text.secondary">
             {module.lessons.length} lecciones
           </Typography>
+          {/* Dentro del summary: sin stopPropagation el clic plegaría el acordeón. */}
+          <IconButton
+            size="small"
+            aria-label={`Editar módulo ${module.title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditModule();
+            }}
+          >
+            <Edit fontSize="small" />
+          </IconButton>
         </Stack>
       </AccordionSummary>
       <AccordionDetails>
@@ -422,6 +607,7 @@ function ModuleAccordion({
             <LessonBlock
               key={lesson.id}
               lesson={lesson}
+              onEdit={() => onEditLesson(lesson)}
               onDelete={() => onDeleteLesson(lesson.id)}
               onChanged={onChanged}
             />
@@ -431,6 +617,9 @@ function ModuleAccordion({
           <Stack direction="row" spacing={1}>
             <Button size="small" startIcon={<Add />} onClick={onAddLesson}>
               Agregar lección
+            </Button>
+            <Button size="small" startIcon={<Edit />} onClick={onEditModule}>
+              Editar módulo
             </Button>
             <Button size="small" color="error" startIcon={<Delete />} onClick={onDeleteModule}>
               Eliminar módulo
@@ -444,10 +633,12 @@ function ModuleAccordion({
 
 function LessonBlock({
   lesson,
+  onEdit,
   onDelete,
   onChanged,
 }: {
   lesson: Lesson;
+  onEdit: () => void;
   onDelete: () => void;
   onChanged: () => void;
 }) {
@@ -462,9 +653,14 @@ function LessonBlock({
               {lesson.duration_seconds > 0 && ` · ${formatDurationLong(lesson.duration_seconds)}`}
             </Typography>
           </Box>
-          <IconButton size="small" color="error" onClick={onDelete} aria-label="Eliminar lección">
-            <Delete fontSize="small" />
-          </IconButton>
+          <Stack direction="row" spacing={0.5}>
+            <IconButton size="small" onClick={onEdit} aria-label="Editar lección">
+              <Edit fontSize="small" />
+            </IconButton>
+            <IconButton size="small" color="error" onClick={onDelete} aria-label="Eliminar lección">
+              <Delete fontSize="small" />
+            </IconButton>
+          </Stack>
         </Stack>
 
         <MaterialUploader
@@ -477,22 +673,98 @@ function LessonBlock({
   );
 }
 
-function ModuleDialog({
+function TrainingDialog({
   open,
+  training,
   onClose,
   onSubmit,
   loading,
 }: {
   open: boolean;
+  training: TrainingDetail;
+  onClose: () => void;
+  onSubmit: (values: TrainingValues) => void;
+  loading: boolean;
+}) {
+  const [values, setValues] = useState<TrainingValues>({
+    title: training.title,
+    description: training.description,
+    level: training.level,
+    estimated_minutes: training.estimated_minutes,
+  });
+
+  const set = <K extends keyof TrainingValues>(key: K, value: TrainingValues[K]) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Editar capacitación</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            label="Título"
+            autoFocus
+            value={values.title}
+            onChange={(event) => set('title', event.target.value)}
+          />
+          <TextField
+            label="Descripción"
+            multiline
+            rows={3}
+            value={values.description}
+            onChange={(event) => set('description', event.target.value)}
+          />
+          <TextField
+            select
+            label="Nivel"
+            value={values.level}
+            onChange={(event) => set('level', event.target.value as TrainingLevel)}
+          >
+            <MenuItem value="BEGINNER">Básico</MenuItem>
+            <MenuItem value="INTERMEDIATE">Intermedio</MenuItem>
+            <MenuItem value="ADVANCED">Avanzado</MenuItem>
+          </TextField>
+          <TextField
+            label="Duración estimada (minutos)"
+            type="number"
+            value={values.estimated_minutes}
+            onChange={(event) => set('estimated_minutes', Number(event.target.value))}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button onClick={onClose}>Cancelar</Button>
+        <Button
+          variant="contained"
+          disabled={values.title.trim().length < 3 || loading}
+          onClick={() => onSubmit({ ...values, title: values.title.trim() })}
+        >
+          Guardar
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function ModuleDialog({
+  open,
+  initialTitle,
+  onClose,
+  onSubmit,
+  loading,
+}: {
+  open: boolean;
+  initialTitle: string;
   onClose: () => void;
   onSubmit: (title: string) => void;
   loading: boolean;
 }) {
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(initialTitle);
+  const editing = initialTitle !== '';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Nuevo módulo</DialogTitle>
+      <DialogTitle>{editing ? 'Editar módulo' : 'Nuevo módulo'}</DialogTitle>
       <DialogContent>
         <TextField
           label="Título del módulo"
@@ -508,12 +780,9 @@ function ModuleDialog({
         <Button
           variant="contained"
           disabled={title.trim().length < 2 || loading}
-          onClick={() => {
-            onSubmit(title.trim());
-            setTitle('');
-          }}
+          onClick={() => onSubmit(title.trim())}
         >
-          Agregar
+          {editing ? 'Guardar' : 'Agregar'}
         </Button>
       </DialogActions>
     </Dialog>
@@ -522,21 +791,23 @@ function ModuleDialog({
 
 function LessonDialog({
   open,
+  initial,
   onClose,
   onSubmit,
   loading,
 }: {
   open: boolean;
+  initial: Lesson | null;
   onClose: () => void;
   onSubmit: (title: string, type: string) => void;
   loading: boolean;
 }) {
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState('VIDEO');
+  const [title, setTitle] = useState(initial?.title ?? '');
+  const [type, setType] = useState<string>(initial?.type ?? 'VIDEO');
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Nueva lección</DialogTitle>
+      <DialogTitle>{initial ? 'Editar lección' : 'Nueva lección'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
@@ -562,12 +833,9 @@ function LessonDialog({
         <Button
           variant="contained"
           disabled={title.trim().length < 2 || loading}
-          onClick={() => {
-            onSubmit(title.trim(), type);
-            setTitle('');
-          }}
+          onClick={() => onSubmit(title.trim(), type)}
         >
-          Agregar
+          {initial ? 'Guardar' : 'Agregar'}
         </Button>
       </DialogActions>
     </Dialog>

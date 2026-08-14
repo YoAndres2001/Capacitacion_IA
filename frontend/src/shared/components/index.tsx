@@ -21,6 +21,9 @@ import type { ReactNode } from 'react';
 import { STATUS_LABEL } from '@/shared/utils/format';
 import { statusColor, trainingStatusColor } from '@/app/theme';
 
+export { SearchableSelect } from './SearchableSelect';
+export type { SelectOption } from './SearchableSelect';
+
 // ── Encabezado de página ─────────────────────────────────────
 export function PageHeader({
   title,

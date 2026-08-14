@@ -79,6 +79,23 @@ HISTORIAL:
 PREGUNTA: {question}
 """
 
+QUERY_GROUNDING_REWRITE = """\
+Reescribe la pregunta del usuario como una consulta de búsqueda autónoma para
+recuperar fragmentos del material de esta capacitación.
+
+Reglas:
+- Sustituye las referencias vagas («esta capacitación», «el capítulo 1»,
+  «explícamelo», «dame un ejemplo») por los términos concretos del temario.
+- Si la pregunta trata de algo que NO figura en el temario, devuélvela tal cual,
+  sin acercarla al temario.
+- Responde SOLO con la consulta, sin comillas ni explicaciones.
+
+CAPACITACIÓN: {title}
+TEMARIO: {syllabus}
+
+PREGUNTA: {question}
+"""
+
 CHAPTERS_PROMPT = """\
 Analiza el siguiente contenido de una capacitación y divídelo en capítulos temáticos.
 

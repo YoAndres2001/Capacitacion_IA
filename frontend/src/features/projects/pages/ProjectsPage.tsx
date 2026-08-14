@@ -1,5 +1,14 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Add, Apps, MenuBook, Storage } from '@mui/icons-material';
+import {
+  Add,
+  Apps,
+  Archive,
+  Edit,
+  MenuBook,
+  MoreVert,
+  Storage,
+  Unarchive,
+} from '@mui/icons-material';
 import {
   Box,
   Button,
@@ -11,6 +20,11 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   TextField,
   Typography,
@@ -24,7 +38,7 @@ import { z } from 'zod';
 import { api, errorMessage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
 import type { Paginated, Project } from '@/shared/api/types';
-import { EmptyState, ErrorState, Loading, PageHeader } from '@/shared/components';
+import { ConfirmDialog, EmptyState, ErrorState, Loading, PageHeader } from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 
 const schema = z.object({
@@ -40,6 +54,10 @@ export default function ProjectsPage() {
   const queryClient = useQueryClient();
   const snackbar = useSnackbar();
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Proyecto en edición; `null` significa que el diálogo crea uno nuevo.
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [menu, setMenu] = useState<{ anchor: HTMLElement; project: Project } | null>(null);
+  const [toArchive, setToArchive] = useState<Project | null>(null);
 
   const projects = useQuery({
     queryKey: ['projects'],
@@ -56,11 +74,55 @@ export default function ProjectsPage() {
     onSuccess: async ({ data }) => {
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
       snackbar.success(`Proyecto «${data.name}» creado con su colección vectorial.`);
-      setDialogOpen(false);
-      form.reset();
+      closeDialog();
     },
     onError: (error) => snackbar.error(errorMessage(error)),
   });
+
+  const updateProject = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: Partial<Project> }) =>
+      api.patch<Project>(endpoints.projects.detail(id), values),
+    onSuccess: async ({ data }) => {
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      await queryClient.invalidateQueries({ queryKey: ['project', data.id] });
+      snackbar.success(`Proyecto «${data.name}» actualizado.`);
+      closeDialog();
+    },
+    onError: (error) => snackbar.error(errorMessage(error)),
+  });
+
+  // El backend archiva en lugar de borrar: el conocimiento indexado se conserva.
+  const archiveProject = useMutation({
+    mutationFn: (id: string) => api.delete(endpoints.projects.detail(id)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      setToArchive(null);
+      snackbar.success('Proyecto archivado.');
+    },
+    onError: (error) => snackbar.error(errorMessage(error)),
+  });
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditing(null);
+    form.reset({ name: '', code: '', description: '' });
+  }
+
+  function openCreate() {
+    setEditing(null);
+    form.reset({ name: '', code: '', description: '' });
+    setDialogOpen(true);
+  }
+
+  function openEdit(project: Project) {
+    setEditing(project);
+    form.reset({
+      name: project.name,
+      code: project.code ?? '',
+      description: project.description ?? '',
+    });
+    setDialogOpen(true);
+  }
 
   if (projects.isLoading) return <Loading label="Cargando proyectos…" />;
   if (projects.isError) return <ErrorState error={projects.error} onRetry={projects.refetch} />;
@@ -73,7 +135,7 @@ export default function ProjectsPage() {
         title="Proyectos"
         subtitle="Cada proyecto (ERP, WMS, CRM…) tiene su propio conocimiento aislado"
         actions={
-          <Button variant="contained" startIcon={<Add />} onClick={() => setDialogOpen(true)}>
+          <Button variant="contained" startIcon={<Add />} onClick={openCreate}>
             Nuevo proyecto
           </Button>
         }
@@ -85,7 +147,7 @@ export default function ProjectsPage() {
           title="Todavía no hay proyectos"
           description="Crea el primer proyecto para empezar a organizar el material de capacitación."
           action={
-            <Button variant="contained" startIcon={<Add />} onClick={() => setDialogOpen(true)}>
+            <Button variant="contained" startIcon={<Add />} onClick={openCreate}>
               Crear proyecto
             </Button>
           }
@@ -94,13 +156,33 @@ export default function ProjectsPage() {
         <Grid container spacing={2.5}>
           {items.map((project) => (
             <Grid size={{ xs: 12, sm: 6, lg: 4, xl: 3 }} key={project.id}>
-              <Card sx={{ height: '100%', borderTop: 4, borderColor: project.color }}>
+              <Card
+                sx={{
+                  height: '100%',
+                  borderTop: 4,
+                  borderColor: project.color,
+                  position: 'relative',
+                }}
+              >
+                <IconButton
+                  size="small"
+                  aria-label={`Acciones de ${project.name}`}
+                  onClick={(event) => setMenu({ anchor: event.currentTarget, project })}
+                  sx={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}
+                >
+                  <MoreVert fontSize="small" />
+                </IconButton>
                 <CardActionArea
                   onClick={() => navigate(`/proyectos/${project.id}`)}
                   sx={{ height: '100%', alignItems: 'stretch' }}
                 >
                   <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                    <Stack
+                      direction="row"
+                      justifyContent="space-between"
+                      alignItems="flex-start"
+                      sx={{ pr: 4 }}
+                    >
                       <Box>
                         <Typography variant="h4">{project.name}</Typography>
                         {project.code && (
@@ -151,9 +233,72 @@ export default function ProjectsPage() {
         </Grid>
       )}
 
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <Box component="form" onSubmit={form.handleSubmit((values) => createProject.mutate(values))}>
-          <DialogTitle>Nuevo proyecto</DialogTitle>
+      <Menu
+        open={menu !== null}
+        anchorEl={menu?.anchor ?? null}
+        onClose={() => setMenu(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          onClick={() => {
+            if (menu) openEdit(menu.project);
+            setMenu(null);
+          }}
+        >
+          <ListItemIcon>
+            <Edit fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Editar</ListItemText>
+        </MenuItem>
+        {menu?.project.status === 'ARCHIVED' ? (
+          <MenuItem
+            onClick={() => {
+              if (menu) updateProject.mutate({ id: menu.project.id, values: { status: 'ACTIVE' } });
+              setMenu(null);
+            }}
+          >
+            <ListItemIcon>
+              <Unarchive fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Restaurar</ListItemText>
+          </MenuItem>
+        ) : (
+          <MenuItem
+            onClick={() => {
+              setToArchive(menu?.project ?? null);
+              setMenu(null);
+            }}
+          >
+            <ListItemIcon>
+              <Archive fontSize="small" color="error" />
+            </ListItemIcon>
+            <ListItemText slotProps={{ primary: { color: 'error' } }}>Archivar</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
+
+      <ConfirmDialog
+        open={toArchive !== null}
+        title="Archivar proyecto"
+        message={`«${toArchive?.name ?? ''}» dejará de estar activo. Sus capacitaciones y su conocimiento indexado se conservan, y puedes restaurarlo más adelante.`}
+        confirmLabel="Archivar"
+        destructive
+        loading={archiveProject.isPending}
+        onConfirm={() => toArchive && archiveProject.mutate(toArchive.id)}
+        onCancel={() => setToArchive(null)}
+      />
+
+      <Dialog open={dialogOpen} onClose={closeDialog} maxWidth="sm" fullWidth>
+        <Box
+          component="form"
+          onSubmit={form.handleSubmit((values) =>
+            editing
+              ? updateProject.mutate({ id: editing.id, values })
+              : createProject.mutate(values),
+          )}
+        >
+          <DialogTitle>{editing ? 'Editar proyecto' : 'Nuevo proyecto'}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField
@@ -171,15 +316,21 @@ export default function ProjectsPage() {
                 rows={3}
                 {...form.register('description')}
               />
-              <Typography variant="caption" color="text.secondary">
-                Al crear el proyecto se aprovisiona automáticamente su colección vectorial FAISS.
-              </Typography>
+              {!editing && (
+                <Typography variant="caption" color="text.secondary">
+                  Al crear el proyecto se aprovisiona automáticamente su colección vectorial FAISS.
+                </Typography>
+              )}
             </Stack>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={() => setDialogOpen(false)}>Cancelar</Button>
-            <Button type="submit" variant="contained" disabled={createProject.isPending}>
-              Crear
+            <Button onClick={closeDialog}>Cancelar</Button>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={createProject.isPending || updateProject.isPending}
+            >
+              {editing ? 'Guardar' : 'Crear'}
             </Button>
           </DialogActions>
         </Box>

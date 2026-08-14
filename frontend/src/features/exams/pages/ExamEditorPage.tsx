@@ -1,6 +1,6 @@
 /** Revisión y publicación de un examen (RF-063, RF-068). */
 
-import { ArrowBack, AutoAwesome, CheckCircle, Delete, Publish } from '@mui/icons-material';
+import { Add, ArrowBack, AutoAwesome, CheckCircle, Delete, Edit, Publish } from '@mui/icons-material';
 import {
   Alert,
   Box,
@@ -22,6 +22,8 @@ import { endpoints } from '@/shared/api/endpoints';
 import type { ExamDetail, Question } from '@/shared/api/types';
 import { ConfirmDialog, ErrorState, Loading, PageHeader, StatusChip } from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
+import { ExamFormDialog } from '@/features/exams/components/ExamFormDialog';
+import { QuestionFormDialog } from '@/features/exams/components/QuestionFormDialog';
 import { LEVEL_LABEL, QUESTION_TYPE_LABEL, formatDuration } from '@/shared/utils/format';
 
 export default function ExamEditorPage() {
@@ -30,12 +32,19 @@ export default function ExamEditorPage() {
   const queryClient = useQueryClient();
   const snackbar = useSnackbar();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // `undefined` = cerrado; `null` = pregunta nueva; objeto = edición.
+  const [questionDialog, setQuestionDialog] = useState<Question | null | undefined>(undefined);
 
   const exam = useQuery({
     queryKey: ['exam', examId],
     queryFn: async () => (await api.get<ExamDetail>(endpoints.exams.detail(examId))).data,
-    refetchInterval: (query) =>
-      (query.state.data?.questions?.length ?? 0) === 0 ? 4000 : false,
+    // Solo tiene sentido esperar preguntas cuando la IA las está redactando;
+    // en un examen manual el sondeo sería un bucle infinito de peticiones.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && data.generated_by_ai && data.questions.length === 0 ? 4000 : false;
+    },
   });
 
   const publish = useMutation({
@@ -80,6 +89,24 @@ export default function ExamEditorPage() {
         actions={
           <>
             <StatusChip status={data.status} />
+            {data.can_edit_questions && (
+              <>
+                <Button
+                  variant="outlined"
+                  startIcon={<Edit />}
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  Editar
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<Add />}
+                  onClick={() => setQuestionDialog(null)}
+                >
+                  Agregar pregunta
+                </Button>
+              </>
+            )}
             {data.status === 'DRAFT' && (
               <Button
                 variant="contained"
@@ -107,17 +134,47 @@ export default function ExamEditorPage() {
         </Alert>
       )}
 
-      <Stack spacing={2}>
-        {data.questions.map((question, index) => (
-          <QuestionCard
-            key={question.id}
-            question={question}
-            index={index}
-            editable={data.can_edit_questions}
-            onDelete={() => setConfirmDelete(question.id)}
-          />
-        ))}
-      </Stack>
+      {data.questions.length === 0 && !generating ? (
+        <Card>
+          <CardContent sx={{ py: 6, textAlign: 'center' }}>
+            <Typography variant="h4" gutterBottom>
+              Todavía no hay preguntas
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Agrega las preguntas una a una. El examen no se puede publicar hasta que tenga al
+              menos una con su respuesta correcta definida.
+            </Typography>
+            <Button variant="contained" startIcon={<Add />} onClick={() => setQuestionDialog(null)}>
+              Agregar pregunta
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Stack spacing={2}>
+          {data.questions.map((question, index) => (
+            <QuestionCard
+              key={question.id}
+              question={question}
+              index={index}
+              editable={data.can_edit_questions}
+              onEdit={() => setQuestionDialog(question)}
+              onDelete={() => setConfirmDelete(question.id)}
+            />
+          ))}
+        </Stack>
+      )}
+
+      {settingsOpen && (
+        <ExamFormDialog open exam={data} onClose={() => setSettingsOpen(false)} />
+      )}
+      {questionDialog !== undefined && (
+        <QuestionFormDialog
+          open
+          examId={examId}
+          question={questionDialog}
+          onClose={() => setQuestionDialog(undefined)}
+        />
+      )}
 
       <ConfirmDialog
         open={confirmDelete !== null}
@@ -137,11 +194,13 @@ function QuestionCard({
   question,
   index,
   editable,
+  onEdit,
   onDelete,
 }: {
   question: Question;
   index: number;
   editable: boolean;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -219,11 +278,18 @@ function QuestionCard({
           </Box>
 
           {editable && (
-            <Tooltip title="Eliminar pregunta">
-              <IconButton size="small" color="error" onClick={onDelete}>
-                <Delete fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <Stack direction="row" spacing={0.5}>
+              <Tooltip title="Editar pregunta">
+                <IconButton size="small" onClick={onEdit}>
+                  <Edit fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Eliminar pregunta">
+                <IconButton size="small" color="error" onClick={onDelete}>
+                  <Delete fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
           )}
         </Stack>
       </CardContent>

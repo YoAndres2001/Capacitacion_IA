@@ -48,7 +48,10 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict) -> dict:
         request = self.context["request"]
-        slug = attrs.get("slug") or slugify(attrs.get("name", ""))
+        # En un PATCH parcial puede no venir el nombre: se conserva el del proyecto
+        # para no regenerar el slug a partir de una cadena vacía.
+        name = attrs.get("name") or (self.instance.name if self.instance else "")
+        slug = attrs.get("slug") or slugify(name)
         attrs["slug"] = slug
 
         qs = Project.objects.filter(company_id=request.user.company_id, slug=slug)

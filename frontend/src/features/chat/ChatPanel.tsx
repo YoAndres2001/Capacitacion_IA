@@ -5,7 +5,15 @@
  * cae automáticamente al endpoint HTTP síncrono.
  */
 
-import { AutoAwesome, Send, SmartToy, ThumbDown, ThumbUp } from '@mui/icons-material';
+import {
+  AutoAwesome,
+  Edit,
+  Refresh,
+  Send,
+  SmartToy,
+  ThumbDown,
+  ThumbUp,
+} from '@mui/icons-material';
 import {
   Alert,
   Avatar,
@@ -53,6 +61,7 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
   const [streaming, setStreaming] = useState('');
   const [pending, setPending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Una conversación por capacitación: se reutiliza la última o se crea una.
   const session = useQuery({
@@ -131,7 +140,9 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
       const content = text.trim();
       if (!content || !sessionId || pending) return;
 
-      setQuestion('');
+      // Solo se vacía el cuadro si es su propio texto el que se envía: al
+      // reintentar una pregunta anterior no se pierde el borrador en curso.
+      setQuestion((draft) => (draft.trim() === content ? '' : draft));
       setPending(true);
       setStreaming('');
 
@@ -141,11 +152,29 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
     [sessionId, pending, socket, level, askHttp],
   );
 
+  /** Devuelve la pregunta al cuadro de texto para retocarla antes de reenviar. */
+  const reuse = useCallback((content: string) => {
+    setQuestion(content);
+    inputRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.data, streaming]);
 
   const history = useMemo(() => messages.data ?? [], [messages.data]);
+
+  // Para cada respuesta, la pregunta que la originó: es lo que reenvía
+  // «Volver a preguntar» sin obligar a reescribirla.
+  const askedFor = useMemo(() => {
+    const map = new Map<string, string>();
+    let lastQuestion = '';
+    for (const message of history) {
+      if (message.role === 'USER') lastQuestion = message.content;
+      else if (lastQuestion) map.set(message.id, lastQuestion);
+    }
+    return map;
+  }, [history]);
 
   return (
     <Stack sx={{ height: '100%', minHeight: 0 }}>
@@ -157,7 +186,7 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
       >
         <SmartToy color="primary" />
         <Typography variant="subtitle1" sx={{ flex: 1 }}>
-          Tutor IA
+          TutorIA
         </Typography>
         <Select
           size="small"
@@ -202,6 +231,11 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
               message={message}
               onSeek={onSeek}
               onFeedback={(value) => feedback.mutate({ messageId: message.id, value })}
+              onReuse={() => reuse(message.content)}
+              onRetry={
+                askedFor.has(message.id) ? () => send(askedFor.get(message.id)!) : undefined
+              }
+              busy={pending}
             />
           ))}
 
@@ -241,6 +275,7 @@ export function ChatPanel({ trainingId, onSeek }: Props) {
         <Stack direction="row" spacing={1}>
           <TextField
             placeholder="Escribe tu pregunta…"
+            inputRef={inputRef}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={(event) => {
@@ -276,16 +311,29 @@ function MessageBubble({
   message,
   onSeek,
   onFeedback,
+  onReuse,
+  onRetry,
+  busy,
 }: {
   message: ChatMessage;
   onSeek?: (materialId: string, seconds: number) => void;
   onFeedback: (value: 1 | -1) => void;
+  /** Copia el texto al cuadro de entrada para editarlo antes de reenviar. */
+  onReuse: () => void;
+  /** Reenvía tal cual la pregunta que originó esta respuesta. */
+  onRetry?: () => void;
+  busy: boolean;
 }) {
   const isUser = message.role === 'USER';
 
   if (isUser) {
     return (
-      <Stack direction="row" justifyContent="flex-end">
+      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={0.5}>
+        <Tooltip title="Reutilizar esta pregunta">
+          <IconButton size="small" onClick={onReuse} aria-label="Reutilizar esta pregunta">
+            <Edit sx={{ fontSize: 15 }} />
+          </IconButton>
+        </Tooltip>
         <Paper
           sx={{
             p: 1.5,
@@ -339,7 +387,7 @@ function MessageBubble({
           )}
         </Paper>
 
-        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5 }}>
           <Tooltip title="Respuesta útil">
             <IconButton
               size="small"
@@ -358,6 +406,26 @@ function MessageBubble({
               <ThumbDown sx={{ fontSize: 15 }} />
             </IconButton>
           </Tooltip>
+          {onRetry && (
+            <Tooltip title="Volver a preguntar lo mismo">
+              {/* `span`: un IconButton deshabilitado no dispara el Tooltip. */}
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={onRetry}
+                  disabled={busy}
+                  aria-label="Volver a preguntar lo mismo"
+                >
+                  <Refresh sx={{ fontSize: 15 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          {!message.grounded && onRetry && (
+            <Typography variant="caption" color="text.secondary">
+              Reintenta o reformula con palabras del contenido.
+            </Typography>
+          )}
         </Stack>
       </Box>
     </Stack>

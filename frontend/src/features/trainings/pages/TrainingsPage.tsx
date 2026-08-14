@@ -10,7 +10,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  MenuItem,
   Stack,
   TextField,
   Tooltip,
@@ -19,13 +18,20 @@ import {
 import Grid from '@mui/material/Grid2';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { api, errorMessage } from '@/shared/api/client';
 import { endpoints } from '@/shared/api/endpoints';
 import type { Paginated, Project, Training } from '@/shared/api/types';
-import { EmptyState, ErrorState, Loading, PageHeader, StatusChip } from '@/shared/components';
+import {
+  EmptyState,
+  ErrorState,
+  Loading,
+  PageHeader,
+  SearchableSelect,
+  StatusChip,
+} from '@/shared/components';
 import { useSnackbar } from '@/shared/components/SnackbarProvider';
 import { LEVEL_LABEL } from '@/shared/utils/format';
 
@@ -38,6 +44,26 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
+
+const LEVEL_OPTIONS = [
+  { value: 'BEGINNER', label: 'Principiante' },
+  { value: 'INTERMEDIATE', label: 'Intermedio' },
+  { value: 'ADVANCED', label: 'Avanzado' },
+];
+
+const STATUS_OPTIONS = [
+  { value: 'DRAFT', label: 'Borrador' },
+  { value: 'PUBLISHED', label: 'Publicada' },
+  { value: 'ARCHIVED', label: 'Archivada' },
+];
+
+const DEFAULT_VALUES: FormValues = {
+  project: '',
+  title: '',
+  description: '',
+  level: 'BEGINNER',
+  estimated_minutes: 60,
+};
 
 export default function TrainingsPage() {
   const navigate = useNavigate();
@@ -67,14 +93,20 @@ export default function TrainingsPage() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      project: '',
-      title: '',
-      description: '',
-      level: 'BEGINNER',
-      estimated_minutes: 60,
-    },
+    defaultValues: DEFAULT_VALUES,
   });
+
+  // El diálogo hereda el proyecto del filtro: quien ya está mirando un proyecto
+  // casi siempre crea la capacitación ahí mismo. Si no hay filtro pero solo
+  // existe un proyecto, tampoco tiene sentido preguntarlo.
+  const openDialog = () => {
+    const options = projects.data?.results ?? [];
+    form.reset({
+      ...DEFAULT_VALUES,
+      project: projectFilter || (options.length === 1 ? options[0].id : ''),
+    });
+    setDialogOpen(true);
+  };
 
   const createTraining = useMutation({
     mutationFn: (values: FormValues) => api.post<Training>(endpoints.trainings.list, values),
@@ -112,7 +144,7 @@ export default function TrainingsPage() {
           <Button
             variant="contained"
             startIcon={<Add />}
-            onClick={() => setDialogOpen(true)}
+            onClick={openDialog}
             disabled={projectOptions.length === 0}
           >
             Nueva capacitación
@@ -121,30 +153,22 @@ export default function TrainingsPage() {
       />
 
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 3, maxWidth: 620 }}>
-        <TextField
-          select
+        <SearchableSelect
           label="Proyecto"
           value={projectFilter}
-          onChange={(event) => setProjectFilter(event.target.value)}
-        >
-          <MenuItem value="">Todos</MenuItem>
-          {projectOptions.map((project) => (
-            <MenuItem key={project.id} value={project.id}>
-              {project.name}
-            </MenuItem>
-          ))}
-        </TextField>
-        <TextField
-          select
+          onChange={setProjectFilter}
+          options={projectOptions.map((project) => ({ value: project.id, label: project.name }))}
+          emptyLabel="Todos"
+          searchPlaceholder="Buscar proyecto…"
+          searchThreshold={2}
+        />
+        <SearchableSelect
           label="Estado"
           value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value)}
-        >
-          <MenuItem value="">Todos</MenuItem>
-          <MenuItem value="DRAFT">Borrador</MenuItem>
-          <MenuItem value="PUBLISHED">Publicada</MenuItem>
-          <MenuItem value="ARCHIVED">Archivada</MenuItem>
-        </TextField>
+          onChange={setStatusFilter}
+          options={STATUS_OPTIONS}
+          emptyLabel="Todos"
+        />
       </Stack>
 
       {projectOptions.length === 0 ? (
@@ -164,7 +188,7 @@ export default function TrainingsPage() {
           title="No hay capacitaciones con estos filtros"
           description="Crea una nueva capacitación o ajusta los filtros."
           action={
-            <Button variant="contained" startIcon={<Add />} onClick={() => setDialogOpen(true)}>
+            <Button variant="contained" startIcon={<Add />} onClick={openDialog}>
               Nueva capacitación
             </Button>
           }
@@ -262,20 +286,26 @@ export default function TrainingsPage() {
           <DialogTitle>Nueva capacitación</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <TextField
-                select
-                label="Proyecto"
-                error={Boolean(form.formState.errors.project)}
-                helperText={form.formState.errors.project?.message}
-                {...form.register('project')}
-                defaultValue=""
-              >
-                {projectOptions.map((project) => (
-                  <MenuItem key={project.id} value={project.id}>
-                    {project.name}
-                  </MenuItem>
-                ))}
-              </TextField>
+              <Controller
+                control={form.control}
+                name="project"
+                render={({ field }) => (
+                  <SearchableSelect
+                    label="Proyecto"
+                    value={field.value}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    options={projectOptions.map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                    }))}
+                    searchPlaceholder="Buscar proyecto…"
+                    searchThreshold={2}
+                    error={Boolean(form.formState.errors.project)}
+                    helperText={form.formState.errors.project?.message}
+                  />
+                )}
+              />
               <TextField
                 label="Título"
                 placeholder="Inventario — Nivel Básico"
@@ -285,11 +315,19 @@ export default function TrainingsPage() {
               />
               <TextField label="Descripción" multiline rows={3} {...form.register('description')} />
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                <TextField select label="Nivel" defaultValue="BEGINNER" {...form.register('level')}>
-                  <MenuItem value="BEGINNER">Principiante</MenuItem>
-                  <MenuItem value="INTERMEDIATE">Intermedio</MenuItem>
-                  <MenuItem value="ADVANCED">Avanzado</MenuItem>
-                </TextField>
+                <Controller
+                  control={form.control}
+                  name="level"
+                  render={({ field }) => (
+                    <SearchableSelect
+                      label="Nivel"
+                      value={field.value}
+                      onChange={(value) => field.onChange(value as FormValues['level'])}
+                      onBlur={field.onBlur}
+                      options={LEVEL_OPTIONS}
+                    />
+                  )}
+                />
                 <TextField
                   label="Duración estimada (min)"
                   type="number"
